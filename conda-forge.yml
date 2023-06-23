@@ -6,3 +6,9 @@ conda_build:
 conda_forge_output_validation: true
 os_version:
   linux_64: cos7
+build_platform:
+  linux_aarch64: linux_64
+  osx_arm64: osx_64
+provider:
+  linux_aarch64: default
+test: native_and_emulated
