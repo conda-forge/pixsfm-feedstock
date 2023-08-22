@@ -6,8 +6,8 @@ index d85e3dc..3411dd1 100644
  # find_package(CUDA ${CUDA_MIN_VERSION} REQUIRED) #not-required
  find_package(Eigen3 3.3 REQUIRED)
  find_package(COLMAP REQUIRED)
-+find_package (Python COMPONENTS Interpreter Development REQUIRED)
-+find_package(pybind11 REQUIRED)
++find_package(Python COMPONENTS Interpreter Development REQUIRED)
++find_package(pybind11 CONFIG REQUIRED)
 +add_definitions(-DH5_USE_HALF_FLOAT)
 +find_package(HighFive REQUIRED)
  
@@ -59,8 +59,8 @@ index 2634636..73c3b50 100644
  macro(PIXSFM_ADD_PYMODULE TARGET_NAME)
      # ${ARGN} will store the list of source files passed to this function.
 -    pybind11_add_module(${TARGET_NAME} ${ARGN})
-+    Python_add_library(${TARGET_NAME} ${ARGN})
-+    target_link_libraries(${TARGET_NAME} pybind11::headers)
++    pybind11_add_module(${TARGET_NAME} MODULE ${ARGN})
++    
      # set_target_properties(${TARGET_NAME} PROPERTIES FOLDER
      #     ${PIXSFM_TARGETS_ROOT_FOLDER}/${FOLDER_NAME})
      target_link_libraries(${TARGET_NAME} PRIVATE pixsfm)
