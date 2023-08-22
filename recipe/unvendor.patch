@@ -6,7 +6,7 @@ index d85e3dc..3411dd1 100644
  # find_package(CUDA ${CUDA_MIN_VERSION} REQUIRED) #not-required
  find_package(Eigen3 3.3 REQUIRED)
  find_package(COLMAP REQUIRED)
-+set(CMAKE_POLICY_DEFAULT_CMP0057 NEW)
++cmake_policy(SET CMP0057 NEW)
 +find_package(Python COMPONENTS Interpreter Development REQUIRED)
 +find_package(pybind11 REQUIRED)
 +add_definitions(-DH5_USE_HALF_FLOAT)
