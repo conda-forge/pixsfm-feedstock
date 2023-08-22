@@ -30,8 +30,8 @@ requirements:
     - numpy                                  # [build_platform != target_platform]
     - pybind11                               # [build_platform != target_platform]
     # x11 stuff
-    - {{ cdt('mesa-libgl-devel') }}  # [unix and not arm64]
-    - {{ cdt('mesa-dri-drivers') }}  # [unix and not arm64]
+    - {{ cdt('mesa-libgl-devel') }}  # [linux]
+    - {{ cdt('mesa-dri-drivers') }}  # [linux]
     - {{ cdt('libselinux') }}        # [linux]
     - {{ cdt('libxcb') }}            # [linux]
     - {{ cdt('libxdamage') }}        # [linux]
