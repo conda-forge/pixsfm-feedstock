@@ -14,6 +14,8 @@ gflags:
 - '2.2'
 glog:
 - '0.6'
+hdf5:
+- 1.14.2
 llvm_openmp:
 - '15'
 macos_machine:

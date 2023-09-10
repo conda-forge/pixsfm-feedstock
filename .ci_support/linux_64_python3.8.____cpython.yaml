@@ -16,6 +16,8 @@ gflags:
 - '2.2'
 glog:
 - '0.6'
+hdf5:
+- 1.14.2
 numpy:
 - '1.22'
 pin_run_as_build:
