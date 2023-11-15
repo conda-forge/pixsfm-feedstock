@@ -17,7 +17,7 @@ gflags:
 glog:
 - '0.6'
 numpy:
-- '1.21'
+- '1.22'
 pin_run_as_build:
   boost-cpp:
     max_pin: x.x.x
@@ -25,9 +25,9 @@ pin_run_as_build:
     min_pin: x.x
     max_pin: x.x
 python:
-- 3.10.* *_cpython
+- 3.8.* *_cpython
 pytorch:
-- '2.0'
+- '2.1'
 target_platform:
 - linux-64
 zip_keys:
