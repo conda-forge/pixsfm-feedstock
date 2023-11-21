@@ -68,7 +68,7 @@ requirements:
     - pyceres
     - pytorch
     - torchvision
-    - boost-cpp
+    - libboost
     - glog
     - gflags
     - libcurand-dev                  # [cuda_compiler_version == "12.0"]
@@ -85,7 +85,7 @@ requirements:
     - h5py
     - omegaconf
     - packaging
-    - boost-cpp
+    - libboost
     - hloc
     - __cuda >={{ cuda_compiler_version }}  # [(cuda_compiler or "None") != "None"]
 
