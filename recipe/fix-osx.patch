@@ -11,6 +11,26 @@ index d85e3dc..00af0b8 100644
  
  if(TESTS_ENABLED)
      enable_testing()
+@@ -107,8 +107,8 @@ set(PIXSFM_EXTERNAL_LIBRARIES
+ 
+ set(PIXSFM_INTERNAL_LIBRARIES
+   HighFive
+-  pybind11::module
+-  pybind11::embed
++  pybind11::pybind11
++  
+ )
+ 
+ include_directories(
+@@ -119,7 +117,7 @@ include_directories(
+ 
+ link_directories(${PIXSFM_LINK_DIRS})
+ 
+-set(PYBIND11_INSTALL ON)
++set(PYBIND11_INSTALL OFF)
+ add_subdirectory(third-party)
+ add_subdirectory(pixsfm)
+ 
 diff --git a/pixsfm/base/src/interpolation.h b/pixsfm/base/src/interpolation.h
 index 92e8c7b..f4d0058 100644
 --- a/pixsfm/base/src/interpolation.h
