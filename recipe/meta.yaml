@@ -20,6 +20,7 @@ source:
     - limit-parallel-jobs.patch
     - fix-osx.patch  # [osx]
     - 119.patch
+    - fix-python-executable.patch
 
 build:
   number: {{ build }}
