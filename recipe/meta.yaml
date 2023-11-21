@@ -90,6 +90,7 @@ requirements:
     - omegaconf
     - packaging
     - hloc
+    - setuptools
     - __cuda >={{ cuda_compiler_version }}  # [(cuda_compiler or "None") != "None"]
 
 
