@@ -67,7 +67,8 @@ requirements:
     - ceres-solver
     - highfive
     - numpy
-    - pycolmap
+    - pycolmap =*=cuda*  # [(cuda_compiler or "None") != "None"]
+    - pycolmap =*=cpu*   # [(cuda_compiler or "None") == "None"]
     - pyceres
     - pytorch
     - torchvision
