@@ -24,6 +24,7 @@ build:
   number: {{ build }}
   string: {{ processor }}h{{ PKG_HASH }}_{{ build }}
   skip: True  # [win]
+  script: ${PYTHON} -m pip install . --no-deps -vv
 
 requirements:
   build:
