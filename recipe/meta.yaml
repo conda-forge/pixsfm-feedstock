@@ -19,6 +19,7 @@ source:
     - unvendor.patch
     - limit-parallel-jobs.patch
     - fix-osx.patch  # [osx]
+    - 119.patch
 
 build:
   number: {{ build }}
