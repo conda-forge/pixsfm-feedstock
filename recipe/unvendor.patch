@@ -1,19 +1,22 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index d85e3dc..3411dd1 100644
+index d85e3dc..d6d871f 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -30,6 +30,11 @@ endif()
- # find_package(CUDA ${CUDA_MIN_VERSION} REQUIRED) #not-required
+@@ -27,8 +27,13 @@ endif()
+ ################################################################################
+ # Find packages
+ ################################################################################
+-# find_package(CUDA ${CUDA_MIN_VERSION} REQUIRED) #not-required
  find_package(Eigen3 3.3 REQUIRED)
- find_package(COLMAP REQUIRED)
 +cmake_policy(SET CMP0057 NEW)
++cmake_policy(SET CMP0146 OLD)
 +find_package(Python COMPONENTS Interpreter Development REQUIRED)
 +find_package(pybind11 REQUIRED)
 +add_definitions(-DH5_USE_HALF_FLOAT)
 +find_package(HighFive REQUIRED)
+ find_package(COLMAP REQUIRED)
  
  ################################################################################
- # Select correct C/C++ standard
 diff --git a/cmake/CMakeConfig.cmake.in b/cmake/CMakeConfig.cmake.in
 index 82cb1e6..b5d909a 100644
 --- a/cmake/CMakeConfig.cmake.in
