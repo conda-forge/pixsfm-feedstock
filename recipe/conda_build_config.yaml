@@ -1,0 +1,4 @@
+c_compiler_version:                       # [aarch64]
+  - '12'                                  # [aarch64]
+cxx_compiler_version:                     # [aarch64]
+  - '12'                                  # [aarch64]
