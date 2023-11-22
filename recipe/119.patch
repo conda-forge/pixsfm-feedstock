@@ -1,0 +1,23 @@
+From aa128cd15b3e8f9daff82602b88aede0fa2ef0f8 Mon Sep 17 00:00:00 2001
+From: Shariff Faleel <shariff.mfa@outlook.com>
+Date: Tue, 19 Sep 2023 12:39:38 -0700
+Subject: [PATCH] Remove ANTIALIAS from list of filters (deprecated in PIL)
+ (Fix #119)
+
+---
+ pixsfm/features/extractor.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/pixsfm/features/extractor.py b/pixsfm/features/extractor.py
+index cdcaccf..3dd3717 100644
+--- a/pixsfm/features/extractor.py
++++ b/pixsfm/features/extractor.py
+@@ -63,7 +63,7 @@ class FeatureExtractor:
+ 
+     filters = {
+         n: getattr(PIL.Image, n)
+-        for n in ["BILINEAR", "BICUBIC", "ANTIALIAS", "LANCZOS"]
++        for n in ["BILINEAR", "BICUBIC", "LANCZOS"]
+     }
+ 
+     def __init__(self, conf: DictConfig, model: BaseModel = None):
