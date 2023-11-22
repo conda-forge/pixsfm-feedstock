@@ -14,7 +14,7 @@ source:
     - fix-osx.patch  # [osx]
 
 build:
-  number: 2
+  number: 3
   skip: True  # [win]
 
 requirements:
@@ -58,7 +58,7 @@ requirements:
     - pyceres
     - pytorch
     - torchvision
-    - boost-cpp
+    - libboost-devel
     - glog
     - gflags
   run:
@@ -73,7 +73,6 @@ requirements:
     - h5py
     - omegaconf
     - packaging
-    - boost-cpp
 
 test:
   imports:
