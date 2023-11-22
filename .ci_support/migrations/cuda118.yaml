@@ -6,8 +6,6 @@ __migrator:
     1
   build_number:
     1
-  # Use cxx version 12
-  use_local: true
   paused: false
   override_cbc_keys:
     - cuda_compiler_stub
@@ -80,16 +78,13 @@ cuda_compiler_version:         # [(linux or win64) and os.environ.get("CF_CUDA_E
   - 11.8                       # [(linux or win64) and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
 
 c_compiler_version:            # [linux and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
-  - 11                         # [linux64 and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
-  - 12                         # [aarch64 and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
+  - 11                         # [linux and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
 
 cxx_compiler_version:          # [linux and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
-  - 11                         # [linux64 and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
-  - 12                         # [aarch64 and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
+  - 11                         # [linux and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
 
 fortran_compiler_version:      # [linux and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
-  - 11                         # [linux64 and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
-  - 12                         # [aarch64 and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
+  - 11                         # [linux and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
 
 cdt_name:                      # [linux and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
   - cos7                       # [linux and os.environ.get("CF_CUDA_ENABLED", "False") == "True"]
