@@ -1,7 +1,5 @@
 BUILD:
 - aarch64-conda_cos7-linux-gnu
-boost_cpp:
-- 1.78.0
 cdt_arch:
 - aarch64
 cdt_name:
@@ -22,16 +20,16 @@ glog:
 - '0.6'
 hdf5:
 - 1.14.2
+libboost_devel:
+- '1.82'
 numpy:
-- '1.22'
+- '1.23'
 pin_run_as_build:
-  boost-cpp:
-    max_pin: x.x.x
   python:
     min_pin: x.x
     max_pin: x.x
 python:
-- 3.10.* *_cpython
+- 3.11.* *_cpython
 pytorch:
 - '2.0'
 target_platform:
