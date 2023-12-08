@@ -5,15 +5,15 @@ channel_sources:
 channel_targets:
 - conda-forge main
 cuda_compiler:
-- None
+- nvcc
 cuda_compiler_version:
-- None
+- '11.2'
 cxx_compiler:
 - gxx
 cxx_compiler_version:
-- '12'
+- '10'
 docker_image:
-- quay.io/condaforge/linux-anvil-cos7-x86_64
+- quay.io/condaforge/linux-anvil-cuda:11.2
 gflags:
 - '2.2'
 glog:
@@ -23,13 +23,13 @@ hdf5:
 libboost_devel:
 - '1.82'
 numpy:
-- '1.22'
+- '1.26'
 pin_run_as_build:
   python:
     min_pin: x.x
     max_pin: x.x
 python:
-- 3.10.* *_cpython
+- 3.12.* *_cpython
 pytorch:
 - '2.1'
 target_platform:
