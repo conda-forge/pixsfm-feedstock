@@ -63,7 +63,7 @@ requirements:
     - pip
     - eigen
     - cgal-cpp
-    - colmap =3.8={{ processor }}*
+    - colmap
     - ceres-solver
     - highfive
     - numpy
