@@ -85,7 +85,6 @@ requirements:
     - matplotlib-base
     - plotly
     - scipy
-    - boost-cpp
     - h5py
     - omegaconf
     - packaging
