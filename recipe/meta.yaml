@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 5 %}
+{% set build = 6 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -64,7 +64,7 @@ requirements:
     - eigen
     - cgal-cpp
     - colmap =3.8={{ processor }}*
-    - ceres-solver
+    - ceres-solver =2.1.0=*
     - highfive
     - numpy
     - pycolmap =*=cuda*  # [(cuda_compiler or "None") != "None"]
