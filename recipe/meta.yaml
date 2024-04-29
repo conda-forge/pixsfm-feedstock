@@ -86,6 +86,7 @@ requirements:
     - plotly
     - scipy
     - h5py
+    - boost-cpp =1.78=*
     - omegaconf
     - packaging
     - hloc
