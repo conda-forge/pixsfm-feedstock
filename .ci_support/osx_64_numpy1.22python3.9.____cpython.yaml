@@ -1,5 +1,9 @@
 MACOSX_DEPLOYMENT_TARGET:
 - '10.9'
+c_stdlib:
+- macosx_deployment_target
+c_stdlib_version:
+- '10.9'
 channel_sources:
 - conda-forge
 channel_targets:
@@ -18,8 +22,6 @@ glog:
 - '0.6'
 hdf5:
 - 1.14.3
-libboost_devel:
-- '1.82'
 llvm_openmp:
 - '16'
 macos_machine:
