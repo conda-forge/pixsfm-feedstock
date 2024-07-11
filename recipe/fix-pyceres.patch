@@ -1,0 +1,13 @@
+diff --git a/pixsfm/__init__.py b/pixsfm/__init__.py
+index 580986b..7876c1b 100644
+--- a/pixsfm/__init__.py
++++ b/pixsfm/__init__.py
+@@ -22,7 +22,7 @@
+ )
+ 
+ cpplog.level = 1  # do not log DEBUG
+-pyceres.glog.minloglevel = 4
++pyceres.logging.minloglevel = 4
+ 
+ 
+ def set_debug():

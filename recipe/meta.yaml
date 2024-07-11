@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 5 %}
+{% set build = 6 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -21,6 +21,7 @@ source:
     - fix-osx.patch  # [osx]
     - 119.patch
     - fix-python-executable.patch
+    - fix-pyceres.patch
 
 build:
   number: {{ build }}
@@ -31,6 +32,7 @@ build:
 
 requirements:
   build:
+    - {{ stdlib('c') }}
     - {{ compiler('cxx') }}
     - {{ compiler('cuda') }}         # [(cuda_compiler or "None") != "None"]
     - cmake
@@ -53,7 +55,6 @@ requirements:
     - {{ cdt('libxext') }}           # [linux]
     - {{ cdt('libxau') }}            # [linux]
     - {{ cdt('expat-devel') }}       # [linux]
-    - sysroot_linux-64 2.17          # [linux64]
   host:
     - hdf5
     - pybind11
@@ -67,8 +68,8 @@ requirements:
     - ceres-solver
     - highfive
     - numpy
-    - pycolmap =*=cuda*  # [(cuda_compiler or "None") != "None"]
-    - pycolmap =*=cpu*   # [(cuda_compiler or "None") == "None"]
+    - pycolmap =0.4.0=cuda*  # [(cuda_compiler or "None") != "None"]
+    - pycolmap =0.4.0=cpu*   # [(cuda_compiler or "None") == "None"]
     - pyceres
     - pytorch
     - torchvision
@@ -80,7 +81,7 @@ requirements:
   run:
     - python
     - {{ pin_compatible('numpy') }}
-    - pycolmap
+    - pycolmap 0.4.0
     - pyceres
     - tqdm
     - matplotlib-base
@@ -92,7 +93,6 @@ requirements:
     - hloc
     - setuptools
     - __cuda >={{ cuda_compiler_version }}  # [(cuda_compiler or "None") != "None"]
-
 
 test:
   imports:

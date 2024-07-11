@@ -1,5 +1,11 @@
 MACOSX_DEPLOYMENT_TARGET:
 - '11.0'
+MACOSX_SDK_VERSION:
+- '11.0'
+c_stdlib:
+- macosx_deployment_target
+c_stdlib_version:
+- '11.0'
 channel_sources:
 - conda-forge
 channel_targets:
@@ -15,11 +21,11 @@ cxx_compiler_version:
 gflags:
 - '2.2'
 glog:
-- '0.6'
+- '0.7'
 hdf5:
 - 1.14.3
 libboost_devel:
-- '1.82'
+- '1.84'
 llvm_openmp:
 - '16'
 macos_machine:
@@ -33,7 +39,7 @@ pin_run_as_build:
 python:
 - 3.10.* *_cpython
 pytorch:
-- '2.1'
+- '2.3'
 target_platform:
 - osx-arm64
 zip_keys:
