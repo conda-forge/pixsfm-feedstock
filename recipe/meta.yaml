@@ -21,6 +21,7 @@ source:
     - fix-osx.patch  # [osx]
     - 119.patch
     - fix-python-executable.patch
+    - fix-pyceres.patch
 
 build:
   number: {{ build }}
