@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 7 %}
+{% set build = 8 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -62,6 +62,7 @@ requirements:
     - cpp-half
     - python
     - pip
+    - setuptools
     - eigen
     - cgal-cpp
     - colmap =3.8={{ processor }}*
