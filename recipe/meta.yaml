@@ -62,6 +62,7 @@ requirements:
     - cpp-half
     - python
     - pip
+    - setuptools
     - eigen
     - cgal-cpp
     - colmap =3.8={{ processor }}*
