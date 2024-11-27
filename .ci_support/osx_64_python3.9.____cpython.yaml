@@ -17,7 +17,7 @@ cuda_compiler_version:
 cxx_compiler:
 - clangxx
 cxx_compiler_version:
-- '17'
+- '18'
 gflags:
 - '2.2'
 glog:
@@ -27,7 +27,7 @@ hdf5:
 libboost_devel:
 - '1.86'
 llvm_openmp:
-- '17'
+- '18'
 macos_machine:
 - x86_64-apple-darwin13.4.0
 numpy:
@@ -39,7 +39,7 @@ pin_run_as_build:
 python:
 - 3.9.* *_cpython
 pytorch:
-- '2.4'
+- '2.5'
 target_platform:
 - osx-64
 zip_keys:
