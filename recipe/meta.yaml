@@ -44,17 +44,6 @@ requirements:
     - cross-python_{{ target_platform }}     # [build_platform != target_platform]
     - numpy                                  # [build_platform != target_platform]
     - pybind11                               # [build_platform != target_platform]
-    # x11 stuff
-    - {{ cdt('mesa-libgl-devel') }}  # [linux]
-    - {{ cdt('mesa-dri-drivers') }}  # [linux]
-    - {{ cdt('libselinux') }}        # [linux]
-    - {{ cdt('libxcb') }}            # [linux]
-    - {{ cdt('libxdamage') }}        # [linux]
-    - {{ cdt('libxfixes') }}         # [linux]
-    - {{ cdt('libxxf86vm') }}        # [linux]
-    - {{ cdt('libxext') }}           # [linux]
-    - {{ cdt('libxau') }}            # [linux]
-    - {{ cdt('expat-devel') }}       # [linux]
   host:
     - hdf5
     - pybind11
@@ -75,6 +64,7 @@ requirements:
     - pytorch
     - torchvision
     - libboost-devel
+    - libgl-devel
     - glog
     - gflags
     - libcurand-dev                  # [cuda_compiler_version == "12.0"]
