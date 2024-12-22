@@ -64,7 +64,7 @@ requirements:
     - pytorch
     - torchvision
     - libboost-devel
-    - libgl-devel
+    - libgl-devel  # [linux]
     - glog
     - gflags
     - libcurand-dev                  # [cuda_compiler_version == "12.0"]
