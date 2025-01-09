@@ -1,0 +1,13 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index d85e3dc..f4e1a6b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -4,6 +4,8 @@ cmake_minimum_required( VERSION 3.0 )
+ # project name
+ project(PIXSFM)
+ 
++find_package(CUDAToolkit REQUIRED)
++
+ ################################################################################
+ # Include CMake dependencies
+ ################################################################################

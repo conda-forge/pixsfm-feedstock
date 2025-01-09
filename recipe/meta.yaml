@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 11 %}
+{% set build = 12 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -22,6 +22,7 @@ source:
     - 119.patch
     - fix-python-executable.patch
     - fix-pyceres.patch
+    - find-cudatoolkit.patch  # [(cuda_compiler or "None") != "None"]
 
 build:
   number: {{ build }}
@@ -67,8 +68,9 @@ requirements:
     - libgl-devel  # [linux]
     - glog
     - gflags
-    - libcurand-dev                  # [cuda_compiler_version == "12.0"]
-    - cuda-cudart-dev                # [win and cuda_compiler_version == "12.0"]
+    - libcurand-dev                  # [(cuda_compiler_version or "None").startswith("12")]
+    - cuda-cudart-dev                # [(cuda_compiler_version or "None").startswith("12")]
+    - cuda-version {{ cuda_compiler_version }}  # [(cuda_compiler_version or "None").startswith("12")]
   run:
     - python
     - pycolmap 0.4.0
