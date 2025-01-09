@@ -6,7 +6,7 @@ index d85e3dc..f4e1a6b 100644
  # project name
  project(PIXSFM)
  
-+find_package(CUDA REQUIRED)
++find_package(CUDAToolkit REQUIRED)
 +
  ################################################################################
  # Include CMake dependencies
