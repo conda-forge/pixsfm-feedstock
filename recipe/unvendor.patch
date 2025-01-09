@@ -2,7 +2,7 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 index d85e3dc..d6d871f 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -27,8 +27,13 @@ endif()
+@@ -27,8 +27,14 @@ endif()
  ################################################################################
  # Find packages
  ################################################################################
@@ -11,6 +11,7 @@ index d85e3dc..d6d871f 100644
 +cmake_policy(SET CMP0057 NEW)
 +cmake_policy(SET CMP0146 OLD)
 +find_package(Python COMPONENTS Interpreter Development REQUIRED)
++find_package(CUDAToolkit REQUIRED COMPONENTS cudart cuda_driver)
 +find_package(pybind11 REQUIRED)
 +add_definitions(-DH5_USE_HALF_FLOAT)
 +find_package(HighFive REQUIRED)
