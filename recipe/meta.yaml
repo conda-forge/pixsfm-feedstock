@@ -67,8 +67,8 @@ requirements:
     - libgl-devel  # [linux]
     - glog
     - gflags
-    - libcurand-dev                  # [cuda_compiler_version == "12.0"]
-    - cuda-cudart-dev                # [win and cuda_compiler_version == "12.0"]
+    - libcurand-dev                  # [(cuda_compiler_version or "None").startswith("12")]
+    - cuda-cudart-dev                # [(cuda_compiler_version or "None").startswith("12")]
   run:
     - python
     - pycolmap 0.4.0
