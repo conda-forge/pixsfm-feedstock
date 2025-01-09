@@ -22,6 +22,7 @@ source:
     - 119.patch
     - fix-python-executable.patch
     - fix-pyceres.patch
+    - find-cudatoolkit.patch  # [(cuda_compiler or "None") != "None"]
 
 build:
   number: {{ build }}
