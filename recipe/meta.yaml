@@ -70,6 +70,7 @@ requirements:
     - gflags
     - libcurand-dev                  # [(cuda_compiler_version or "None").startswith("12")]
     - cuda-cudart-dev                # [(cuda_compiler_version or "None").startswith("12")]
+    - cuda-version {{ cuda_compiler_version }}  # [(cuda_compiler_version or "None").startswith("12")]
   run:
     - python
     - pycolmap 0.4.0
