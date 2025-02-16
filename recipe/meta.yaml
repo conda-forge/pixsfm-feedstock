@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 12 %}
+{% set build = 13 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
