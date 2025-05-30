@@ -27,15 +27,15 @@ hdf5:
 libboost_devel:
 - '1.86'
 numpy:
-- '2'
+- '2.0'
 pin_run_as_build:
   python:
     min_pin: x.x
     max_pin: x.x
 python:
-- 3.13.* *_cp313
+- 3.10.* *_cpython
 pytorch:
-- '2.6'
+- '2.7'
 target_platform:
 - linux-64
 zip_keys:
