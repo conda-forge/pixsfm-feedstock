@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 13 %}
+{% set build = 14 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -22,7 +22,7 @@ source:
     - 119.patch
     - fix-python-executable.patch
     - fix-pyceres.patch
-    - find-cudatoolkit.patch  # [(cuda_compiler or "None") != "None"]
+    - find-cudatoolkit.patch  # [cuda_compiler_version != "None"]
 
 build:
   number: {{ build }}
@@ -35,8 +35,8 @@ requirements:
   build:
     - {{ stdlib('c') }}
     - {{ compiler('cxx') }}
-    - {{ compiler('cuda') }}         # [(cuda_compiler or "None") != "None"]
-    - cmake
+    - {{ compiler('cuda') }}         # [cuda_compiler_version != "None"]
+    - cmake <4
     - make
     - git
     - llvm-openmp  # [osx]
@@ -55,12 +55,12 @@ requirements:
     - setuptools
     - eigen
     - cgal-cpp
-    - colmap =3.8={{ processor }}*
+    - colmap 3.8 {{ processor }}*
     - ceres-solver
     - highfive
     - numpy
-    - pycolmap =0.4.0=cuda*  # [(cuda_compiler or "None") != "None"]
-    - pycolmap =0.4.0=cpu*   # [(cuda_compiler or "None") == "None"]
+    - pycolmap 0.4.0 cuda*  # [cuda_compiler_version != "None"]
+    - pycolmap 0.4.0 cpu*   # [cuda_compiler_version == "None"]
     - pyceres
     - pytorch
     - torchvision
@@ -84,7 +84,7 @@ requirements:
     - packaging
     - hloc
     - setuptools
-    - __cuda >={{ cuda_compiler_version }}  # [(cuda_compiler or "None") != "None"]
+    - __cuda >={{ cuda_compiler_version }}  # [cuda_compiler_version != "None"]
 
 test:
   imports:
