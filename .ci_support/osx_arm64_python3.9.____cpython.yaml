@@ -15,7 +15,7 @@ cuda_compiler_version:
 cxx_compiler:
 - clangxx
 cxx_compiler_version:
-- '19'
+- '18'
 gflags:
 - '2.2'
 glog:
