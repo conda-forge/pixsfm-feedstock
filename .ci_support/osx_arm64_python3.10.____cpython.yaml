@@ -23,7 +23,7 @@ glog:
 hdf5:
 - 1.14.6
 libboost_devel:
-- '1.86'
+- '1.88'
 llvm_openmp:
 - '19'
 macos_machine:
