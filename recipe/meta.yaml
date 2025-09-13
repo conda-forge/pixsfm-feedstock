@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 17 %}
+{% set build = 18 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -28,7 +28,6 @@ build:
   number: {{ build }}
   string: {{ processor }}h{{ PKG_HASH }}_{{ build }}
   skip: True  # [win]
-  skip: True  # [py<39]
   script: ${PYTHON} -m pip install . --no-deps -vv
 
 requirements:
@@ -48,7 +47,7 @@ requirements:
   host:
     - hdf5
     - pybind11
-    - highfive
+    - highfive <3
     - cpp-half
     - python
     - pip
@@ -68,9 +67,9 @@ requirements:
     - libgl-devel  # [linux]
     - glog
     - gflags
-    - libcurand-dev                  # [(cuda_compiler_version or "None").startswith("12")]
-    - cuda-cudart-dev                # [(cuda_compiler_version or "None").startswith("12")]
-    - cuda-version {{ cuda_compiler_version }}  # [(cuda_compiler_version or "None").startswith("12")]
+    - libcurand-dev                  # [cuda_compiler_version != "None"]
+    - cuda-cudart-dev                # [cuda_compiler_version != "None"]
+    - cuda-version {{ cuda_compiler_version }}  # [cuda_compiler_version != "None"]
   run:
     - python
     - pycolmap 0.4.0
