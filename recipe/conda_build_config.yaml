@@ -2,3 +2,6 @@ c_compiler_version:    # [osx]
 - '18'                 # [osx]
 cxx_compiler_version:  # [osx]
 - '18'                 # [osx]
+# Workaround for https://github.com/conda-forge/opencv-feedstock/issues/493
+MACOSX_SDK_VERSION:       # [osx]
+  - 15.5                  # [osx]
