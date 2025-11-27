@@ -2,7 +2,6 @@ azure:
   free_disk_space: true
   settings_linux:
     swapfile_size: 4GiB
-  # Workaround for https://github.com/conda-forge/opencv-feedstock/issues/493
   settings_osx:
     pool:
       vmImage: macos-14
