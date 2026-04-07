@@ -46,7 +46,7 @@ requirements:
     - pybind11                               # [build_platform != target_platform]
   host:
     - hdf5
-    - pybind11
+    - pybind11 3.0.1
     - highfive <3
     - cpp-half
     - python
