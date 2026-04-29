@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 21 %}
+{% set build = 22 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -46,12 +46,12 @@ requirements:
     - pybind11                               # [build_platform != target_platform]
   host:
     - hdf5
-    - pybind11
+    - pybind11 3.0.1
     - highfive <3
     - cpp-half
     - python
     - pip
-    - setuptools
+    - setuptools <82
     - eigen
     - cgal-cpp
     - colmap 3.8 {{ processor }}*
@@ -82,7 +82,7 @@ requirements:
     - omegaconf
     - packaging
     - hloc
-    - setuptools
+    - setuptools <82
     - __cuda >={{ cuda_compiler_version }}  # [cuda_compiler_version != "None"]
 
 test:
