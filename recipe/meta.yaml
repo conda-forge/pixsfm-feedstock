@@ -51,7 +51,7 @@ requirements:
     - cpp-half
     - python
     - pip
-    - setuptools
+    - setuptools <82
     - eigen
     - cgal-cpp
     - colmap 3.8 {{ processor }}*
@@ -82,7 +82,7 @@ requirements:
     - omegaconf
     - packaging
     - hloc
-    - setuptools
+    - setuptools <82
     - __cuda >={{ cuda_compiler_version }}  # [cuda_compiler_version != "None"]
 
 test:
