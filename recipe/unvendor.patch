@@ -73,7 +73,7 @@ diff --git a/pixsfm/features/src/featurepatch.h b/pixsfm/features/src/featurepat
 index 2715fdf..ec47aa7 100644
 --- a/pixsfm/features/src/featurepatch.h
 +++ b/pixsfm/features/src/featurepatch.h
-@@ -23,6 +23,16 @@
+@@ -26,6 +26,17 @@
  #include <atomic>
  #include <mutex>
  
