@@ -69,3 +69,21 @@ index 2634636..73c3b50 100644
      # set_target_properties(${TARGET_NAME} PROPERTIES FOLDER
      #     ${PIXSFM_TARGETS_ROOT_FOLDER}/${FOLDER_NAME})
      target_link_libraries(${TARGET_NAME} PRIVATE pixsfm)
+diff --git a/pixsfm/features/src/featurepatch.h b/pixsfm/features/src/featurepatch.h
+index 2715fdf..ec47aa7 100644
+--- a/pixsfm/features/src/featurepatch.h
++++ b/pixsfm/features/src/featurepatch.h
+@@ -23,6 +23,13 @@
+ #include <atomic>
+ #include <mutex>
+ 
++namespace HighFive {
++template <>
++inline AtomicType<half_float::half>::AtomicType() {
++  _hid = H5Tcopy(H5T_NATIVE_FLOAT16);
++}
++}  // namespace HighFive
++
+ namespace pixsfm {
+ 
+ struct PatchStatus {
