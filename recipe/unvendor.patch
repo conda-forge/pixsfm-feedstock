@@ -73,16 +73,20 @@ diff --git a/pixsfm/features/src/featurepatch.h b/pixsfm/features/src/featurepat
 index 2715fdf..ec47aa7 100644
 --- a/pixsfm/features/src/featurepatch.h
 +++ b/pixsfm/features/src/featurepatch.h
-@@ -23,6 +23,13 @@
+@@ -23,6 +23,16 @@
  #include <atomic>
  #include <mutex>
  
++#if __has_include(<highfive/half_float.hpp>)
++#include <highfive/half_float.hpp>
++#else
 +namespace HighFive {
 +template <>
 +inline AtomicType<half_float::half>::AtomicType() {
 +  _hid = H5Tcopy(H5T_NATIVE_FLOAT16);
 +}
 +}  // namespace HighFive
++#endif
 +
  namespace pixsfm {
  
