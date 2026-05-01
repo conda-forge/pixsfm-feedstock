@@ -1,0 +1,14 @@
+diff --git a/pixsfm/keypoint_adjustment/bindings.cc b/pixsfm/keypoint_adjustment/bindings.cc
+index d843cf4..3de9d0a 100644
+--- a/pixsfm/keypoint_adjustment/bindings.cc
++++ b/pixsfm/keypoint_adjustment/bindings.cc
+@@ -50,8 +50,7 @@ void bind_keypoint_adjustment(py::module& m) {
+       py::class_<KeypointOptimizerOptions>(m, "KeypointOptimizerOptions")
+           .def(py::init<>())
+           .def_readwrite("solver", &KeypointOptimizerOptions::solver_options)
+-          .def_readwrite("loss", &KeypointOptimizerOptions::loss,
+-                         py::keep_alive<1, 2>())
++          .def_readwrite("loss", &KeypointOptimizerOptions::loss)
+           .def_readwrite("print_summary",
+                          &KeypointOptimizerOptions::print_summary)
+           .def_readwrite("bound", &KeypointOptimizerOptions::bound);
