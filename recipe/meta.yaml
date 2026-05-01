@@ -23,7 +23,7 @@ source:
     - fix-python-executable.patch
     - fix-pyceres.patch
     - find-cudatoolkit.patch  # [cuda_compiler_version != "None"]
-    - fix-python314.patch
+    - fix-python-314.patch
 
 build:
   number: {{ build }}
