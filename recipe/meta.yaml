@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 22 %}
+{% set build = 23 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -23,6 +23,7 @@ source:
     - fix-python-executable.patch
     - fix-pyceres.patch
     - find-cudatoolkit.patch  # [cuda_compiler_version != "None"]
+    - fix-python-314.patch
 
 build:
   number: {{ build }}
