@@ -66,6 +66,7 @@ requirements:
     - torchvision
     - libboost-devel
     - libgl-devel  # [linux]
+    - eigen-abi-devel
     - glog
     - gflags
     - libcurand-dev                  # [cuda_compiler_version != "None"]
