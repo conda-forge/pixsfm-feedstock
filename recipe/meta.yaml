@@ -24,6 +24,7 @@ source:
     - fix-pyceres.patch
     - find-cudatoolkit.patch  # [cuda_compiler_version != "None"]
     - fix-python-314.patch
+    - fix-eigen5.patch
 
 build:
   number: {{ build }}
