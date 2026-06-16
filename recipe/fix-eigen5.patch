@@ -2,12 +2,12 @@ diff --git a/CMakeLists.txt b/CMakeLists.txt
 index d85e3dc..deaadd4 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
-@@ -28,7 +28,7 @@ endif()
+@@ -29,7 +29,7 @@ endif()
+ ################################################################################
  # Find packages
  ################################################################################
- # find_package(CUDA ${CUDA_MIN_VERSION} REQUIRED) #not-required
 -find_package(Eigen3 3.3 REQUIRED)
 +find_package(Eigen3 REQUIRED)
- find_package(COLMAP REQUIRED)
- 
- ################################################################################
+ cmake_policy(SET CMP0057 NEW)
+ cmake_policy(SET CMP0146 OLD)
+ find_package(Python COMPONENTS Interpreter Development REQUIRED)
