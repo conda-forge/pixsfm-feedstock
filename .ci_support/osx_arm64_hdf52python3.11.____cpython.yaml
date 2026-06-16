@@ -16,6 +16,8 @@ cxx_compiler:
 - clangxx
 cxx_compiler_version:
 - '18'
+eigen_abi_devel:
+- 5.0.1
 gflags:
 - '2.2'
 glog:
@@ -23,7 +25,7 @@ glog:
 hdf5:
 - '2'
 libboost_devel:
-- '1.88'
+- '1.90'
 llvm_openmp:
 - '19'
 macos_machine:

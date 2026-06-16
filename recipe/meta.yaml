@@ -1,6 +1,6 @@
 {% set name = "pixsfm" %}
 {% set version = "1.0.0" %}
-{% set build = 24 %}
+{% set build = 25 %}
 
 {% set processor = "cpu" if cuda_compiler_version == "None" else "gpu" %}  # [not osx]
 {% set processor = "cpu" %}  # [osx]
@@ -24,6 +24,7 @@ source:
     - fix-pyceres.patch
     - find-cudatoolkit.patch  # [cuda_compiler_version != "None"]
     - fix-python-314.patch
+    - fix-eigen5.patch
 
 build:
   number: {{ build }}
@@ -66,6 +67,7 @@ requirements:
     - torchvision
     - libboost-devel
     - libgl-devel  # [linux]
+    - eigen-abi-devel
     - glog
     - gflags
     - libcurand-dev                  # [cuda_compiler_version != "None"]
