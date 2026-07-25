@@ -19,7 +19,7 @@ cxx_compiler_version:
 eigen_abi_devel:
 - 5.0.1
 gflags:
-- '2.2'
+- '2.3'
 glog:
 - '0.7'
 hdf5:
