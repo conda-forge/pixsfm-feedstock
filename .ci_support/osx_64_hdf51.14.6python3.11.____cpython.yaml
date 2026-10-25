@@ -1,5 +1,3 @@
-MACOSX_DEPLOYMENT_TARGET:
-- '11.0'
 MACOSX_SDK_VERSION:
 - '15.5'
 c_stdlib:
@@ -27,7 +25,7 @@ hdf5:
 libboost_devel:
 - '1.90'
 llvm_openmp:
-- '19'
+- '21'
 macos_machine:
 - x86_64-apple-darwin13.4.0
 numpy:
@@ -39,6 +37,6 @@ pin_run_as_build:
 python:
 - 3.11.* *_cpython
 pytorch:
-- '2.13'
+- '2.14'
 target_platform:
 - osx-64
