@@ -25,6 +25,8 @@ source:
     - find-cudatoolkit.patch  # [cuda_compiler_version != "None"]
     - fix-python-314.patch
     - fix-eigen5.patch
+    # don't link libpython into the extension module (avoids overlinking now that libpython is split out)
+    - no-embed.patch  # [linux]
 
 build:
   number: {{ build }}
