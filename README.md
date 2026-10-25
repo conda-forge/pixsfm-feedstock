@@ -13,7 +13,6 @@ Here we provide pixsfm, a Python package that can be readily used with COLMAP an
 This makes it easy to refine an existing COLMAP model or reconstruct a new dataset with state-of-the-art
 image matching. Our framework also improves visual localization in challenging conditions.
 
-
 Current build status
 ====================
 
