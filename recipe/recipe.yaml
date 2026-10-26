@@ -3,7 +3,6 @@ schema_version: 1
 context:
   name: pixsfm
   version: "1.0.0"
-  colmap_version: "4.2.1"
   build_number: 29
   # Prioritize gpu build if cudatoolkit can be installed (through __cuda virtual package)
   processor: ${{ "gpu" if cuda_compiler_version != "None" else "cpu" }}
@@ -88,19 +87,19 @@ requirements:
       then: libgl-devel
     - if: cuda_compiler_version != "None"
       then:
-        - colmap ${{ colmap_version }}.* cuda*
-        - pycolmap ${{ colmap_version }}.* cuda*
+        - colmap * cuda*
+        - pycolmap * cuda*
         - libcurand-dev
         - cuda-cudart-dev
         - cuda-version ${{ cuda_compiler_version }}.*
       else:
-        - colmap ${{ colmap_version }}.* cpu*
-        - pycolmap ${{ colmap_version }}.* cpu*
+        - colmap * cpu*
+        - pycolmap * cpu*
         # otherwise the solver prefers the CUDA build of ceres-solver
         - ceres-solver * cpu*
   run:
     - python
-    - pycolmap ${{ colmap_version }}.*
+    - pycolmap
     - pyceres
     - tqdm
     - matplotlib-base
