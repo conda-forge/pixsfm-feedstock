@@ -24,12 +24,18 @@ hdf5:
 - 1.14.6
 libboost_devel:
 - '1.90'
+libcurl:
+- '8'
+libopenimageio:
+- '3.2'
 llvm_openmp:
 - '21'
 macos_machine:
 - arm64-apple-darwin20.0.0
 numpy:
 - '2'
+openssl:
+- '3.5'
 pin_run_as_build:
   python:
     min_pin: x.x

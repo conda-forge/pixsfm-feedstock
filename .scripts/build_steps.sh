@@ -41,19 +41,25 @@ CONDARC
 
 ( endgroup "Configuring build environment" ) 2> /dev/null
 
-( startgroup "Provisioning base env with micromamba" ) 2> /dev/null
+( startgroup "Provisioning base env with pixi" ) 2> /dev/null
 
-MAMBA_ROOT_PREFIX=~/.conda
-MICROMAMBA_EXE=micromamba
+pushd "${FEEDSTOCK_ROOT}"
+echo Installing environment
+arch=$(uname -m)
+if [[ "$arch" == "x86_64" ]]; then
+  arch="64"
+fi
+PIXI_ENV=docker-build-linux-${arch}
+sed -i.bak -e "s/platforms = .*/platforms = [\"linux-${arch}\"]/" -e "s/# __PLATFORM_SPECIFIC_ENV__ =/${PIXI_ENV} =/" pixi.toml
+pixi install --environment "${PIXI_ENV}"
+pixi list --environment "${PIXI_ENV}"
 
-echo Creating environment
-mv "${MINIFORGE_HOME}"/conda-meta/history "${MINIFORGE_HOME}"/conda-meta/history.$(date +%Y-%m-%d-%H-%M-%S)
-echo > "${MINIFORGE_HOME}"/conda-meta/history
-"${MICROMAMBA_EXE}" install --yes --root-prefix "${MAMBA_ROOT_PREFIX}" --prefix "${MINIFORGE_HOME}" \
-    --override-channels --channel conda-forge --strict-channel-priority \
-    pip  rattler-build conda-forge-ci-setup=4 "conda-build>=26.3"
+echo Activating environment
+eval "$(pixi shell-hook --environment "${PIXI_ENV}")"
+mv pixi.toml.bak pixi.toml
+popd
 
-( endgroup "Provisioning base env with micromamba" ) 2> /dev/null
+( endgroup "Provisioning base env with pixi" ) 2> /dev/null
 
 ( startgroup "Configuring conda" ) 2> /dev/null
 export CONDA_LIBMAMBA_SOLVER_NO_CHANNELS_FROM_INSTALLED=1

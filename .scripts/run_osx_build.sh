@@ -32,36 +32,30 @@ if [[ "${arch}" == "x86_64" ]]; then
   arch="64"
 fi
 
-( startgroup "Provisioning base env with micromamba" ) 2> /dev/null
+( startgroup "Provisioning base env with pixi" ) 2> /dev/null
 
-MAMBA_ROOT_PREFIX="${MINIFORGE_HOME}-micromamba-$(date +%s)"
-MICROMAMBA_VERSION="2.9.0-0"
-MICROMAMBA_URL="https://github.com/mamba-org/micromamba-releases/releases/download/${MICROMAMBA_VERSION}/micromamba-osx-${arch}"
-MICROMAMBA_TMPDIR=$(mktemp -d)
-MICROMAMBA_EXE=${MICROMAMBA_TMPDIR}/micromamba
+echo Installing pixi
+curl -fsSL https://pixi.sh/install.sh | bash
+export PATH="~/.pixi/bin:$PATH"
 
-echo "Downloading micromamba ${MICROMAMBA_VERSION}"
-curl -L -o "${MICROMAMBA_EXE}" "${MICROMAMBA_URL}"
-chmod +x "${MICROMAMBA_EXE}"
+pushd "${FEEDSTOCK_ROOT}"
+echo Installing environment
+mkdir -p "${MINIFORGE_HOME}"
+PIXI_ENV=build
+sed -i.bak "s/platforms = .*/platforms = [\"osx-${arch}\"]/" pixi.toml
+pixi install --environment "${PIXI_ENV}"
+pixi list --environment "${PIXI_ENV}"
 
-echo Creating environment
-"${MICROMAMBA_EXE}" create --yes --root-prefix "${MAMBA_ROOT_PREFIX}" --prefix "${MINIFORGE_HOME}" \
-    --override-channels --channel conda-forge --strict-channel-priority \
-    pip rattler-build conda-forge-ci-setup=4 "conda-build>=26.3"
-echo "Moving pkgs cache from ${MAMBA_ROOT_PREFIX} to ${MINIFORGE_HOME}"
-mv "${MAMBA_ROOT_PREFIX}/pkgs" "${MINIFORGE_HOME}"
+echo Activating environment
+eval "$(pixi shell-hook --environment "${PIXI_ENV}")"
+mv pixi.toml.bak pixi.toml
+popd
 
-echo Cleaning up micromamba
-rm -rf "${MAMBA_ROOT_PREFIX}" "${MICROMAMBA_EXE}" || :
-
-( endgroup "Provisioning base env with micromamba" ) 2> /dev/null
+( endgroup "Provisioning base env with pixi" ) 2> /dev/null
 
 ( startgroup "Configuring conda" ) 2> /dev/null
 
 # Activate the base conda environment
-echo Activating environment
-source "${MINIFORGE_HOME}/etc/profile.d/conda.sh"
-conda activate base
 # Configure the solver
 export CONDA_SOLVER="libmamba"
 export CONDA_LIBMAMBA_SOLVER_NO_CHANNELS_FROM_INSTALLED=1
