@@ -1,17 +1,17 @@
 diff --git a/CMakeLists.txt b/CMakeLists.txt
-index 05574ca..bbe3c01 100644
+index 05574ca..6701d04 100644
 --- a/CMakeLists.txt
 +++ b/CMakeLists.txt
 @@ -35,6 +35,14 @@ find_package(Python COMPONENTS Interpreter Development REQUIRED)
  find_package(pybind11 REQUIRED)
  add_definitions(-DH5_USE_HALF_FLOAT)
  find_package(HighFive REQUIRED)
-+# COLMAP's exported targets may reference Qt5 while its dependency lookup
-+# prefers whichever Qt it finds first. Prefer Qt5 if it is available.
++# COLMAP's dependency lookup uses find_package(QT NAMES Qt5 Qt6), which picks
++# Qt5 first if both are installed. COLMAP is built against Qt6, so prefer it.
 +if(NOT DEFINED QT_DIR)
-+  find_package(Qt5 QUIET COMPONENTS Core)
-+  if(Qt5_FOUND)
-+    set(QT_DIR ${Qt5_DIR})
++  find_package(Qt6 QUIET COMPONENTS Core)
++  if(Qt6_FOUND)
++    set(QT_DIR ${Qt6_DIR})
 +  endif()
 +endif()
  find_package(COLMAP REQUIRED)

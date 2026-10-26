@@ -96,8 +96,7 @@ requirements:
       else:
         - colmap ${{ colmap_version }}.* cpu*
         - pycolmap ${{ colmap_version }}.* cpu*
-        # colmap's cpu build pulls in CUDA (via libfaiss), which otherwise
-        # makes the solver pick the CUDA build of ceres-solver
+        # otherwise the solver prefers the CUDA build of ceres-solver
         - ceres-solver * cpu*
   run:
     - python
