@@ -1,11 +1,8 @@
-azure:
-  settings_osx:
-    pool:
-      vmImage: macos-14
 conda_build:
   error_overlinking: true
 conda_build_tool: rattler-build
 conda_forge_output_validation: true
+conda_install_tool: pixi
 github:
   branch_name: main
   tooling_branch_name: main
@@ -18,3 +15,6 @@ workflow_settings:
 provider:
   linux_aarch64: default
   osx_arm64: default
+build_platform:
+  linux_aarch64: linux_aarch64
+  osx_arm64: osx_arm64
