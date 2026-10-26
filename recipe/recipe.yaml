@@ -85,15 +85,17 @@ requirements:
     - openssl
     - if: linux
       then: libgl-devel
+    # colmap4.patch requires the COLMAP 4 API; without a lower bound the solver
+    # may silently fall back to colmap 3.8
     - if: cuda_compiler_version != "None"
       then:
-        - colmap * cuda*
+        - colmap >=4.2 cuda*
         - pycolmap * cuda*
         - libcurand-dev
         - cuda-cudart-dev
         - cuda-version ${{ cuda_compiler_version }}.*
       else:
-        - colmap * cpu*
+        - colmap >=4.2 cpu*
         - pycolmap * cpu*
         # otherwise the solver prefers the CUDA build of ceres-solver
         - ceres-solver * cpu*
