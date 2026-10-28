@@ -1,0 +1,2297 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 05574ca..bceb0fd 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -36,6 +36,9 @@ find_package(pybind11 REQUIRED)
+ add_definitions(-DH5_USE_HALF_FLOAT)
+ find_package(HighFive REQUIRED)
+ find_package(COLMAP REQUIRED)
++# COLMAP's config enables AUTORCC when it finds Qt. pixsfm has no Qt resources,
++# and running the target's rcc fails when cross-compiling.
++set(CMAKE_AUTORCC OFF)
+ 
+ ################################################################################
+ # Select correct C/C++ standard
+@@ -95,19 +98,16 @@ set(PIXSFM_INCLUDE_DIRS
+   ${HDF5_INCLUDE_DIRS}
+   ${EIGEN3_INCLUDE_DIR}
+   ${PROJECT_SOURCE_DIR}
+-  ${FREEIMAGE_INCLUDE_DIRS}
+   ${CERES_INCLUDE_DIRS}
+-  ${COLMAP_INCLUDE_DIRS}
+ )
+ 
+ set(PIXSFM_LINK_DIRS
+-  ${COLMAP_LINK_DIRS}
+ )
+ 
++# The imported COLMAP target also carries required compile definitions.
+ set(PIXSFM_EXTERNAL_LIBRARIES
+   ${CERES_LIBRARIES}
+-  ${FREEIMAGE_LIBRARIES}
+-  ${COLMAP_LIBRARIES}
++  colmap::colmap
+   ${HDF5_C_LIBRARIES}
+ )
+ 
+diff --git a/pixsfm/base/src/colmap_compat.h b/pixsfm/base/src/colmap_compat.h
+new file mode 100644
+index 0000000..e2273bd
+--- /dev/null
++++ b/pixsfm/base/src/colmap_compat.h
+@@ -0,0 +1,58 @@
++#pragma once
++
++// Helpers bridging the COLMAP 3.8 image pose API (qvec/tvec stored on the
++// image) that pixsfm was written against and the COLMAP 4.x API, where poses
++// are stored as rig_from_world on frames.
++//
++// pixsfm optimizes poses as two parameter blocks: the rotation quaternion
++// (4 values, Eigen order x, y, z, w) and the translation (3 values). Both
++// blocks point into the frame's Rigid3d::params. This only equals the image's
++// cam_from_world if the image is the reference sensor of its frame, which is
++// always the case for single-camera reconstructions.
++
++#include <colmap/geometry/rigid3.h>
++#include <colmap/scene/frame.h>
++#include <colmap/scene/image.h>
++#include <colmap/scene/reconstruction.h>
++#include <colmap/sensor/models.h>
++
++#include <stdexcept>
++#include <string>
++
++namespace pixsfm {
++
++// Camera models supported by pixsfm's templated residuals (all perspective
++// models; spherical models are not supported).
++#define PIXSFM_CAMERA_MODEL_SWITCH_CASES  \
++  PERSPECTIVE_CAMERA_MODEL_CASES          \
++  default:                                \
++    CAMERA_MODEL_DOES_NOT_EXIST_EXCEPTION \
++    break;
++
++inline colmap::Rigid3d& MutableCamFromWorld(colmap::Image& image) {
++  if (!image.HasFramePtr()) {
++    throw std::invalid_argument("Image " + std::to_string(image.ImageId()) +
++                                " is not associated with a frame.");
++  }
++  if (!image.IsRefInFrame()) {
++    throw std::invalid_argument(
++        "Image " + std::to_string(image.ImageId()) +
++        " is not the reference sensor of its rig. pixsfm only supports "
++        "trivial rigs (one camera per frame).");
++  }
++  return image.FramePtr()->RigFromWorld();
++}
++
++inline double* QvecData(colmap::Image& image) {
++  return MutableCamFromWorld(image).params.data();
++}
++
++inline double* TvecData(colmap::Image& image) {
++  return MutableCamFromWorld(image).params.data() + 4;
++}
++
++inline void NormalizeQvec(colmap::Image& image) {
++  MutableCamFromWorld(image).rotation().normalize();
++}
++
++}  // namespace pixsfm
+diff --git a/pixsfm/base/src/irls_optim.h b/pixsfm/base/src/irls_optim.h
+index 3a578fd..bfbe09a 100644
+--- a/pixsfm/base/src/irls_optim.h
++++ b/pixsfm/base/src/irls_optim.h
+@@ -11,7 +11,7 @@ namespace py = pybind11;
+ #include <highfive/H5Group.hpp>
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/projection.h>
++#include <colmap/scene/projection.h>
+ #include <colmap/util/types.h>
+ 
+ #include "base/src/interpolation.h"
+diff --git a/pixsfm/base/src/projection.h b/pixsfm/base/src/projection.h
+index 838e01e..36b0eea 100644
+--- a/pixsfm/base/src/projection.h
++++ b/pixsfm/base/src/projection.h
+@@ -1,14 +1,15 @@
+ 
+ #pragma once
+ 
+-#include <colmap/base/camera_models.h>
+-#include <colmap/base/image.h>
+-#include <colmap/base/projection.h>
+-#include <colmap/util/math.h>
++#include <colmap/geometry/rigid3.h>
++#include <colmap/scene/camera.h>
++#include <colmap/sensor/models.h>
+ 
+ #include <ceres/ceres.h>
+-#include <ceres/rotation.h>
+ 
++#include <Eigen/Geometry>
++
++#include "base/src/colmap_compat.h"
+ #include "base/src/interpolation.h"
+ #include "util/src/types.h"
+ 
+@@ -16,25 +17,16 @@
+ 
+ namespace pixsfm {
+ 
++// Quaternions (qvec) are stored in Eigen order (x, y, z, w), matching
++// colmap::Rigid3d::params.
++
+ // Deep tested, equal to colmap::CalculateDepth, but templated
+ template <typename T>
+ inline void CalculateDepth(const T* const qvec, const T* const tvec,
+                            const T* const point3D, T* depth) {
+-  T rotation_matrix[3 * 3];
+-  ceres::QuaternionToRotation(qvec, rotation_matrix);
+-
+-  *depth = tvec[2];
+-
+-  T norm = T(0.0);
+-  for (int i = 0; i < 3; i++) {
+-    *depth += rotation_matrix[2 * 3 + i] * point3D[i];
+-    norm += rotation_matrix[i * 3 + 2] * rotation_matrix[i * 3 + 2];
+-  }
+-
+-  *depth /= ceres::sqrt(norm);
+-
+-  // const double proj_z = proj_matrix.row(2).dot(point3D.homogeneous());
+-  // return proj_z * proj_matrix.col(2).norm();
++  const Eigen::Map<const Eigen::Quaternion<T>> q(qvec);
++  const Eigen::Map<const Eigen::Matrix<T, 3, 1>> xyz(point3D);
++  *depth = (q * xyz)[2] + tvec[2];
+ }
+ 
+ // Deep tested
+@@ -49,44 +41,40 @@ void PixelToWorld(const T* camera_params, const T* qvec, const T* tvec,
+   for (int i = 0; i < 3; i++) {
+     local_xyz[i] = local_xyz[i] * depth[0] - tvec[i];
+   }
+-  // local_xyz[2] = depth[0] - tvec[2];
+-  Eigen::Quaternion<T> q(qvec[0], qvec[1], qvec[2], qvec[3]);
++  const Eigen::Map<const Eigen::Quaternion<T>> q(qvec);
+   Eigen::Map<Eigen::Matrix<T, 3, 1>> map(xyz);
+   map = q.conjugate() * Eigen::Map<const Eigen::Matrix<T, 3, 1>>(local_xyz);
+-  // ceres::QuaternionRotatePoint(q, local_xyz, xyz);
+ }
+ 
+ // Deep tested
+ template <typename CameraModel, typename T>
+ inline void WorldToPixel(const T* camera_params, const T* qvec, const T* tvec,
+                          const T* xyz, T* xy) {
+-  T projection[3];
+-  ceres::QuaternionRotatePoint(qvec, xyz, projection);
+-  projection[0] += tvec[0];
+-  projection[1] += tvec[1];
+-  projection[2] += tvec[2];
+-
+-  // Project to image plane.
+-  projection[0] /= projection[2];  // u
+-  projection[1] /= projection[2];  // v
+-
+-  CameraModel::WorldToImage(camera_params, projection[0], projection[1], &xy[0],
+-                            &xy[1]);
++  const Eigen::Map<const Eigen::Quaternion<T>> q(qvec);
++  const Eigen::Matrix<T, 3, 1> projection =
++      q * Eigen::Map<const Eigen::Matrix<T, 3, 1>>(xyz) +
++      Eigen::Map<const Eigen::Matrix<T, 3, 1>>(tvec);
++
++  // Project to image plane. Like COLMAP 3.8, no cheirality check is done here.
++  CameraModel::ImgFromCam(camera_params, projection[0], projection[1],
++                          projection[2], &xy[0], &xy[1],
++                          /*check_cheirality=*/false);
+ }
+ 
+ inline void WorldToPixel(const colmap::Camera& camera,
+-                         const Eigen::Vector4d& qvec,
+-                         const Eigen::Vector3d& tvec,
++                         const colmap::Rigid3d& cam_from_world,
+                          const Eigen::Vector3d& xyz, double* xy) {
+-  switch (camera.ModelId()) {
+-#define CAMERA_MODEL_CASE(CameraModel)                                  \
+-  case colmap::CameraModel::kModelId:                                   \
+-    WorldToPixel<colmap::CameraModel>(camera.ParamsData(), qvec.data(), \
+-                                      tvec.data(), xyz.data(), xy);     \
++  const double* qvec = cam_from_world.params.data();
++  const double* tvec = cam_from_world.params.data() + 4;
++  switch (camera.model_id) {
++#define CAMERA_MODEL_CASE(CameraModel)                                      \
++  case colmap::CameraModel::model_id:                                       \
++    WorldToPixel<colmap::CameraModel>(camera.params.data(), qvec, tvec,     \
++                                      xyz.data(), xy);                      \
+     break;
+-    CAMERA_MODEL_SWITCH_CASES
++    PIXSFM_CAMERA_MODEL_SWITCH_CASES
+ #undef CAMERA_MODEL_CASE
+   }
+ }
+ 
+-}  // namespace pixsfm
+\ No newline at end of file
++}  // namespace pixsfm
+diff --git a/pixsfm/base/src/undistortion.h b/pixsfm/base/src/undistortion.h
+index f0c8317..972c93a 100644
+--- a/pixsfm/base/src/undistortion.h
++++ b/pixsfm/base/src/undistortion.h
+@@ -1,9 +1,9 @@
+ #pragma once
+ 
+-#include <colmap/base/camera_models.h>
+-#include <colmap/base/image.h>
+-#include <colmap/base/projection.h>
+-#include <colmap/util/math.h>
++#include <colmap/sensor/models.h>
++#include <colmap/scene/image.h>
++#include <colmap/scene/projection.h>
++#include <colmap/math/math.h>
+ 
+ #include <ceres/ceres.h>
+ #include <ceres/rotation.h>
+diff --git a/pixsfm/bundle_adjustment/src/bundle_adjustment_options.cc b/pixsfm/bundle_adjustment/src/bundle_adjustment_options.cc
+index 78dc093..2bd3d16 100644
+--- a/pixsfm/bundle_adjustment/src/bundle_adjustment_options.cc
++++ b/pixsfm/bundle_adjustment/src/bundle_adjustment_options.cc
+@@ -2,12 +2,76 @@
+ 
+ #include <colmap/util/misc.h>
+ 
++#include "util/src/log_exceptions.h"
++
+ namespace pixsfm {
+ 
++size_t BundleAdjustmentSetup::NumImages() const { return image_ids_.size(); }
++
++size_t BundleAdjustmentSetup::NumPoints() const {
++  return variable_point3D_ids_.size() + constant_point3D_ids_.size();
++}
++
++size_t BundleAdjustmentSetup::NumConstantCameras() const {
++  return constant_camera_ids_.size();
++}
++
++size_t BundleAdjustmentSetup::NumConstantPoses() const {
++  return constant_poses_.size();
++}
++
++size_t BundleAdjustmentSetup::NumConstantTvecs() const {
++  return constant_tvecs_.size();
++}
++
++size_t BundleAdjustmentSetup::NumVariablePoints() const {
++  return variable_point3D_ids_.size();
++}
++
++size_t BundleAdjustmentSetup::NumConstantPoints() const {
++  return constant_point3D_ids_.size();
++}
++
++void BundleAdjustmentSetup::AddImage(const colmap::image_t image_id) {
++  image_ids_.insert(image_id);
++}
++
++bool BundleAdjustmentSetup::HasImage(const colmap::image_t image_id) const {
++  return image_ids_.find(image_id) != image_ids_.end();
++}
++
++void BundleAdjustmentSetup::RemoveImage(const colmap::image_t image_id) {
++  image_ids_.erase(image_id);
++}
++
++void BundleAdjustmentSetup::SetConstantCamera(
++    const colmap::camera_t camera_id) {
++  constant_camera_ids_.insert(camera_id);
++}
++
++void BundleAdjustmentSetup::SetVariableCamera(
++    const colmap::camera_t camera_id) {
++  constant_camera_ids_.erase(camera_id);
++}
++
++bool BundleAdjustmentSetup::IsConstantCamera(
++    const colmap::camera_t camera_id) const {
++  return constant_camera_ids_.find(camera_id) != constant_camera_ids_.end();
++}
++
+ void BundleAdjustmentSetup::SetConstantPose(const colmap::image_t image_id) {
+   THROW_CHECK(HasImage(image_id));
+   THROW_CHECK(!HasConstantTvec(image_id));
+-  colmap::BundleAdjustmentConfig::SetConstantPose(image_id);
++  constant_poses_.insert(image_id);
++}
++
++void BundleAdjustmentSetup::SetVariablePose(const colmap::image_t image_id) {
++  constant_poses_.erase(image_id);
++}
++
++bool BundleAdjustmentSetup::HasConstantPose(
++    const colmap::image_t image_id) const {
++  return constant_poses_.find(image_id) != constant_poses_.end();
+ }
+ 
+ void BundleAdjustmentSetup::SetConstantTvec(const colmap::image_t image_id,
+@@ -17,16 +81,76 @@ void BundleAdjustmentSetup::SetConstantTvec(const colmap::image_t image_id,
+   THROW_CHECK(HasImage(image_id));
+   THROW_CHECK(!HasConstantPose(image_id));
+   THROW_CHECK(!colmap::VectorContainsDuplicateValues(idxs));
+-  colmap::BundleAdjustmentConfig::SetConstantTvec(image_id, idxs);
++  constant_tvecs_.emplace(image_id, idxs);
++}
++
++void BundleAdjustmentSetup::RemoveConstantTvec(
++    const colmap::image_t image_id) {
++  constant_tvecs_.erase(image_id);
+ }
++
++bool BundleAdjustmentSetup::HasConstantTvec(
++    const colmap::image_t image_id) const {
++  return constant_tvecs_.find(image_id) != constant_tvecs_.end();
++}
++
+ void BundleAdjustmentSetup::AddVariablePoint(
+     const colmap::point3D_t point3D_id) {
+   THROW_CHECK(!HasConstantPoint(point3D_id));
+-  colmap::BundleAdjustmentConfig::AddVariablePoint(point3D_id);
++  variable_point3D_ids_.insert(point3D_id);
+ }
++
+ void BundleAdjustmentSetup::AddConstantPoint(
+     const colmap::point3D_t point3D_id) {
+   THROW_CHECK(!HasVariablePoint(point3D_id));
+-  colmap::BundleAdjustmentConfig::AddConstantPoint(point3D_id);
++  constant_point3D_ids_.insert(point3D_id);
++}
++
++bool BundleAdjustmentSetup::HasPoint(
++    const colmap::point3D_t point3D_id) const {
++  return HasVariablePoint(point3D_id) || HasConstantPoint(point3D_id);
++}
++
++bool BundleAdjustmentSetup::HasVariablePoint(
++    const colmap::point3D_t point3D_id) const {
++  return variable_point3D_ids_.find(point3D_id) !=
++         variable_point3D_ids_.end();
++}
++
++bool BundleAdjustmentSetup::HasConstantPoint(
++    const colmap::point3D_t point3D_id) const {
++  return constant_point3D_ids_.find(point3D_id) !=
++         constant_point3D_ids_.end();
++}
++
++void BundleAdjustmentSetup::RemoveVariablePoint(
++    const colmap::point3D_t point3D_id) {
++  variable_point3D_ids_.erase(point3D_id);
++}
++
++void BundleAdjustmentSetup::RemoveConstantPoint(
++    const colmap::point3D_t point3D_id) {
++  constant_point3D_ids_.erase(point3D_id);
++}
++
++const std::unordered_set<colmap::image_t>& BundleAdjustmentSetup::Images()
++    const {
++  return image_ids_;
+ }
++
++const std::unordered_set<colmap::point3D_t>&
++BundleAdjustmentSetup::VariablePoints() const {
++  return variable_point3D_ids_;
++}
++
++const std::unordered_set<colmap::point3D_t>&
++BundleAdjustmentSetup::ConstantPoints() const {
++  return constant_point3D_ids_;
++}
++
++const std::vector<int>& BundleAdjustmentSetup::ConstantTvec(
++    const colmap::image_t image_id) const {
++  return constant_tvecs_.at(image_id);
++}
++
+ }  // namespace pixsfm
+diff --git a/pixsfm/bundle_adjustment/src/bundle_adjustment_options.h b/pixsfm/bundle_adjustment/src/bundle_adjustment_options.h
+index de31d92..cb94369 100644
+--- a/pixsfm/bundle_adjustment/src/bundle_adjustment_options.h
++++ b/pixsfm/bundle_adjustment/src/bundle_adjustment_options.h
+@@ -11,11 +11,13 @@ namespace py = pybind11;
+ #include <highfive/H5Group.hpp>
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/projection.h>
+-#include <colmap/base/reconstruction.h>
+-#include <colmap/optim/bundle_adjustment.h>
++#include <colmap/scene/reconstruction.h>
+ #include <colmap/util/types.h>
+ 
++#include <unordered_map>
++#include <unordered_set>
++#include <vector>
++
+ #include "features/src/featuremap.h"
+ #include "features/src/featurepatch.h"
+ #include "features/src/featureset.h"
+@@ -24,21 +26,68 @@ namespace py = pybind11;
+ 
+ namespace pixsfm {
+ 
+-// Configuration container to setup bundle adjustment problems.
+-class BundleAdjustmentSetup : public colmap::BundleAdjustmentConfig {
++// Configuration container to setup bundle adjustment problems. Mirrors the
++// image-based colmap::BundleAdjustmentConfig of COLMAP 3.8 (COLMAP 4.x
++// configures poses per frame instead).
++class BundleAdjustmentSetup {
+  public:
+-  BundleAdjustmentSetup() : colmap::BundleAdjustmentConfig() {}
+-  BundleAdjustmentSetup(const colmap::BundleAdjustmentConfig& config)
+-      : colmap::BundleAdjustmentConfig(config) {}
+-
+-  // Overwrite methods which trigger glog
++  BundleAdjustmentSetup() = default;
++
++  size_t NumImages() const;
++  size_t NumPoints() const;
++  size_t NumConstantCameras() const;
++  size_t NumConstantPoses() const;
++  size_t NumConstantTvecs() const;
++  size_t NumVariablePoints() const;
++  size_t NumConstantPoints() const;
++
++  // Add / remove images from the configuration.
++  void AddImage(const colmap::image_t image_id);
++  bool HasImage(const colmap::image_t image_id) const;
++  void RemoveImage(const colmap::image_t image_id);
++
++  // Set cameras of added images as constant or variable. By default all
++  // cameras of added images are variable.
++  void SetConstantCamera(const colmap::camera_t camera_id);
++  void SetVariableCamera(const colmap::camera_t camera_id);
++  bool IsConstantCamera(const colmap::camera_t camera_id) const;
++
++  // Set the pose of added images as constant. The pose is defined as the
++  // rotational and translational part of the projection matrix.
+   void SetConstantPose(const colmap::image_t image_id);
++  void SetVariablePose(const colmap::image_t image_id);
++  bool HasConstantPose(const colmap::image_t image_id) const;
++
++  // Set the translational part of the pose, hence the constant pose
++  // indices may be in [0, 1, 2] and must be unique.
+   void SetConstantTvec(const colmap::image_t image_id,
+                        const std::vector<int>& idxs);
++  void RemoveConstantTvec(const colmap::image_t image_id);
++  bool HasConstantTvec(const colmap::image_t image_id) const;
++
++  // Add / remove points from the configuration. Note that points can either
++  // be variable or constant but not both at the same time.
+   void AddVariablePoint(const colmap::point3D_t point3D_id);
+   void AddConstantPoint(const colmap::point3D_t point3D_id);
+-
+-  inline void SetAllConstant(colmap::Reconstruction* reconstruction);
++  bool HasPoint(const colmap::point3D_t point3D_id) const;
++  bool HasVariablePoint(const colmap::point3D_t point3D_id) const;
++  bool HasConstantPoint(const colmap::point3D_t point3D_id) const;
++  void RemoveVariablePoint(const colmap::point3D_t point3D_id);
++  void RemoveConstantPoint(const colmap::point3D_t point3D_id);
++
++  // Access configuration data.
++  const std::unordered_set<colmap::image_t>& Images() const;
++  const std::unordered_set<colmap::point3D_t>& VariablePoints() const;
++  const std::unordered_set<colmap::point3D_t>& ConstantPoints() const;
++  const std::vector<int>& ConstantTvec(const colmap::image_t image_id) const;
++
++ private:
++  std::unordered_set<colmap::camera_t> constant_camera_ids_;
++  std::unordered_set<colmap::image_t> image_ids_;
++  std::unordered_set<colmap::point3D_t> variable_point3D_ids_;
++  std::unordered_set<colmap::point3D_t> constant_point3D_ids_;
++  std::unordered_set<colmap::image_t> constant_poses_;
++  std::unordered_map<colmap::image_t, std::vector<int>> constant_tvecs_;
+ };
+ 
+ struct BundleOptimizerOptions {
+diff --git a/pixsfm/bundle_adjustment/src/bundle_optimizer.h b/pixsfm/bundle_adjustment/src/bundle_optimizer.h
+index 6688b13..5696cfc 100644
+--- a/pixsfm/bundle_adjustment/src/bundle_optimizer.h
++++ b/pixsfm/bundle_adjustment/src/bundle_optimizer.h
+@@ -2,13 +2,10 @@
+ 
+ #include <ceres/ceres.h>
+ 
+-#include <colmap/base/camera_models.h>
+-#include <colmap/base/camera_rig.h>
+-#include <colmap/base/cost_functions.h>
+-#include <colmap/base/projection.h>
+-#include <colmap/base/reconstruction.h>
+-#include <colmap/optim/bundle_adjustment.h>
+-#include <colmap/util/alignment.h>
++#include <colmap/estimators/cost_functions/manifold.h>
++#include <colmap/scene/reconstruction.h>
++#include <colmap/sensor/models.h>
++#include <colmap/util/eigen_alignment.h>
+ #include <colmap/util/logging.h>
+ #include <colmap/util/misc.h>
+ #include <colmap/util/threading.h>
+@@ -20,6 +17,7 @@
+ #include "features/src/references.h"
+ 
+ #include "base/src/callbacks.h"
++#include "base/src/colmap_compat.h"
+ 
+ #include "util/src/log_exceptions.h"
+ #include "util/src/statistics.h"
+@@ -229,7 +227,7 @@ bool BundleOptimizer<Derived>::SolveProblem(
+   }
+ 
+   if (options_.print_summary) {
+-    colmap::PrintHeading2("Bundle adjustment report");
++    PrintHeading2("Bundle adjustment report");
+     PrintSolverSummary(summary_);
+     // We need to replace this with our own Printer!!!
+   }
+@@ -252,7 +250,7 @@ void BundleOptimizer<Derived>::AddImageToProblem(
+   colmap::Image& image = reconstruction->Image(image_id);
+   colmap::Camera& camera = reconstruction->Camera(image.CameraId());
+ 
+-  image.NormalizeQvec();
++  NormalizeQvec(image);
+ 
+   // Add residuals to bundle adjustment problem.
+   for (colmap::point2D_t point2D_idx = 0; point2D_idx < image.NumPoints2D();
+@@ -263,9 +261,9 @@ void BundleOptimizer<Derived>::AddImageToProblem(
+       continue;
+     }
+ 
+-    colmap::Point3D& point3D = reconstruction->Point3D(point2D.Point3DId());
++    colmap::Point3D& point3D = reconstruction->Point3D(point2D.point3D_id);
+ 
+-    if (static_cast<int>(point3D.Track().Length()) <
++    if (static_cast<int>(point3D.track.Length()) <
+         options_.min_track_length) {
+       continue;
+     }
+@@ -286,11 +284,11 @@ void BundleOptimizer<Derived>::AddPointToProblem(
+   colmap::Point3D& point3D = reconstruction->Point3D(point3D_id);
+ 
+   // Is 3D point already fully contained in the problem? If so we skip.
+-  if (point3D_reg_track_idx_[point3D_id].size() == point3D.Track().Length()) {
++  if (point3D_reg_track_idx_[point3D_id].size() == point3D.track.Length()) {
+     return;
+   }
+ 
+-  for (const auto& track_el : point3D.Track().Elements()) {
++  for (const auto& track_el : point3D.track.Elements()) {
+     // Skip observations that were already added in `FillImages`.
+     if (setup_.HasImage(track_el.image_id)) {
+       continue;
+@@ -318,8 +316,8 @@ bool BundleOptimizer<Derived>::RegisterPoint3DObservation(
+     colmap::point2D_t point2D_idx, colmap::Reconstruction* reconstruction) {
+   colmap::Point3D& point3D = reconstruction->Point3D(point3D_id);
+ 
+-  for (int track_idx = 0; track_idx < point3D.Track().Length(); ++track_idx) {
+-    auto& track_el = point3D.Track().Element(track_idx);
++  for (int track_idx = 0; track_idx < point3D.track.Length(); ++track_idx) {
++    auto& track_el = point3D.track.Element(track_idx);
+     if (track_el.image_id == image_id && track_el.point2D_idx == point2D_idx) {
+       point3D_reg_track_idx_[point3D_id].insert(track_idx);
+       return true;
+@@ -342,16 +340,16 @@ void BundleOptimizer<Derived>::ParameterizePoints(
+     int min_track_length =
+         options_.min_track_length > 0
+             ? std::min(options_.min_track_length,
+-                       static_cast<int>(point3D.Track().Length()))
+-            : point3D.Track().Length();
++                       static_cast<int>(point3D.track.Length()))
++            : point3D.track.Length();
+     if (min_track_length > elem.second.size()) {
+-      problem_->SetParameterBlockConstant(point3D.XYZ().data());
++      problem_->SetParameterBlockConstant(point3D.xyz.data());
+       ++cnt;
+     } else if (options_.solver_options.use_inner_iterations) {
+       // Ruhe-Weldin 2 approximation to the VarPro Algorithm:
+       // Use EPI (RCS is solved outside, i.e. only camera parameters)
+       options_.solver_options.inner_iteration_ordering->AddElementToGroup(
+-          point3D.XYZ().data(), 0);
++          point3D.xyz.data(), 0);
+     }
+   }
+   STDLOG(DEBUG) << "Num Constant points3D: " << cnt << std::endl;
+@@ -359,7 +357,7 @@ void BundleOptimizer<Derived>::ParameterizePoints(
+   // been added to problem.
+   for (const colmap::point3D_t point3D_id : setup_.ConstantPoints()) {
+     colmap::Point3D& point3D = reconstruction->Point3D(point3D_id);
+-    problem_->SetParameterBlockConstant(point3D.XYZ().data());
++    problem_->SetParameterBlockConstant(point3D.xyz.data());
+   }
+ }
+ 
+@@ -372,8 +370,8 @@ void BundleOptimizer<Derived>::ParameterizeImages(
+       colmap::Image& image = reconstruction->Image(image_id);
+       colmap::Camera& camera = reconstruction->Camera(image.CameraId());
+ 
+-      double* qvec_data = image.Qvec().data();
+-      double* tvec_data = image.Tvec().data();
++      double* qvec_data = QvecData(image);
++      double* tvec_data = TvecData(image);
+ 
+       const bool constant_pose = !options_.refine_extrinsics ||
+                                  setup_.HasConstantPose(image_id) ||
+@@ -381,12 +379,14 @@ void BundleOptimizer<Derived>::ParameterizeImages(
+ 
+       // Set pose parameterization.
+       if (!constant_pose) {
+-        colmap::SetQuaternionManifold(problem_.get(), qvec_data);
++        colmap::SetManifold(problem_.get(), qvec_data,
++                            colmap::CreateEigenQuaternionManifold());
+         if (setup_.HasConstantTvec(image_id)) {
+           const std::vector<int>& constant_tvec_idxs =
+               setup_.ConstantTvec(image_id);
+-          colmap::SetSubsetManifold(3, constant_tvec_idxs, problem_.get(),
+-                                    tvec_data);
++          colmap::SetManifold(
++              problem_.get(), tvec_data,
++              colmap::CreateSubsetManifold(3, constant_tvec_idxs));
+         }
+       } else {
+         problem_->SetParameterBlockConstant(qvec_data);
+@@ -411,31 +411,32 @@ void BundleOptimizer<Derived>::ParameterizeCameras(
+     colmap::Camera& camera = reconstruction->Camera(camera_id);
+ 
+     if (constant_camera || setup_.IsConstantCamera(camera_id)) {
+-      problem_->SetParameterBlockConstant(camera.ParamsData());
++      problem_->SetParameterBlockConstant(camera.params.data());
+       continue;
+     } else {
+       std::vector<int> const_camera_params;
+ 
+       if (!options_.refine_focal_length) {
+-        const std::vector<size_t>& params_idxs = camera.FocalLengthIdxs();
++        const auto params_idxs = camera.FocalLengthIdxs();
+         const_camera_params.insert(const_camera_params.end(),
+                                    params_idxs.begin(), params_idxs.end());
+       }
+       if (!options_.refine_principal_point) {
+-        const std::vector<size_t>& params_idxs = camera.PrincipalPointIdxs();
++        const auto params_idxs = camera.PrincipalPointIdxs();
+         const_camera_params.insert(const_camera_params.end(),
+                                    params_idxs.begin(), params_idxs.end());
+       }
+       if (!options_.refine_extra_params) {
+-        const std::vector<size_t>& params_idxs = camera.ExtraParamsIdxs();
++        const auto params_idxs = camera.ExtraParamsIdxs();
+         const_camera_params.insert(const_camera_params.end(),
+                                    params_idxs.begin(), params_idxs.end());
+       }
+ 
+       if (const_camera_params.size() > 0) {
+-        colmap::SetSubsetManifold(static_cast<int>(camera.NumParams()),
+-                                  const_camera_params, problem_.get(),
+-                                  camera.ParamsData());
++        colmap::SetManifold(
++            problem_.get(), camera.params.data(),
++            colmap::CreateSubsetManifold(
++                static_cast<int>(camera.params.size()), const_camera_params));
+       }
+     }
+   }
+diff --git a/pixsfm/bundle_adjustment/src/costmap_bundle_optimizer.h b/pixsfm/bundle_adjustment/src/costmap_bundle_optimizer.h
+index c468dc0..dd6868b 100644
+--- a/pixsfm/bundle_adjustment/src/costmap_bundle_optimizer.h
++++ b/pixsfm/bundle_adjustment/src/costmap_bundle_optimizer.h
+@@ -91,20 +91,20 @@ int CostMapBundleOptimizer::AddResiduals(const colmap::image_t image_id,
+     return 0;
+   }
+ 
+-  colmap::point3D_t point3D_id = point2D.Point3DId();
++  colmap::point3D_t point3D_id = point2D.point3D_id;
+   colmap::Point3D& point3D = reconstruction->Point3D(point3D_id);
+ 
+-  double* qvec_data = image.Qvec().data();
+-  double* tvec_data = image.Tvec().data();
+-  double* camera_params_data = camera.ParamsData();
+-  double* xyz = point3D.XYZ().data();
++  double* qvec_data = QvecData(image);
++  double* tvec_data = TvecData(image);
++  double* camera_params_data = camera.params.data();
++  double* xyz = point3D.xyz.data();
+ 
+   ceres::ResidualBlockId block_id;
+ 
+   if (constant_pose) {
+     ceres::CostFunction* cost_function =
+         CreateFeatureReferenceConstantPoseCostFunctor<CHANNELS, 1, -1>(
+-            camera.ModelId(), qvec_data, tvec_data,
++            camera.model_id, qvec_data, tvec_data,
+             feature_view.GetFeaturePatch(image_id, point2D_idx),
+             nullptr,  // Just minimize
+             nullptr, interpolation_config_);
+@@ -113,7 +113,7 @@ int CostMapBundleOptimizer::AddResiduals(const colmap::image_t image_id,
+   } else {
+     ceres::CostFunction* cost_function =
+         CreateFeatureReferenceCostFunctor<CHANNELS, 1, -1>(
+-            camera.ModelId(),
++            camera.model_id,
+             feature_view.GetFeaturePatch(image_id, point2D_idx),
+             nullptr,  // Just minimize
+             nullptr, interpolation_config_);
+diff --git a/pixsfm/bundle_adjustment/src/costmap_extractor.h b/pixsfm/bundle_adjustment/src/costmap_extractor.h
+index 539d19a..10af233 100644
+--- a/pixsfm/bundle_adjustment/src/costmap_extractor.h
++++ b/pixsfm/bundle_adjustment/src/costmap_extractor.h
+@@ -1,7 +1,7 @@
+ #pragma once
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/projection.h>
++#include <colmap/scene/projection.h>
+ #include <colmap/util/types.h>
+ 
+ #include "features/src/featuremap.h"
+@@ -192,7 +192,7 @@ double CostMapExtractor::RunSubset(
+   for (colmap::point3D_t point3D_id : point3D_ids) {
+     Reference& reference = references.at(point3D_id);
+     auto& point3D = reconstruction.Point3D(point3D_id);
+-    for (auto& track_el : point3D.Track().Elements()) {
++    for (auto& track_el : point3D.track.Elements()) {
+       colmap::image_t image_id = track_el.image_id;
+       colmap::point2D_t point2D_idx = track_el.point2D_idx;
+       FeatureMap<dtype>& fmap = fview.GetFeatureMap(image_id);
+@@ -211,11 +211,10 @@ double CostMapExtractor::RunSubset(
+         // If the featuremap is dense, we slice a smaller patch
+         const colmap::Image& image = reconstruction.Image(image_id);
+         const colmap::Point2D& p2D = image.Point2D(point2D_idx);
+-        Eigen::Vector2d xy = ProjectPointToImage(
+-            reconstruction.Point3D(p2D.Point3DId()).XYZ(),
+-            image.ProjectionMatrix(),
+-            reconstruction.Camera(image.CameraId())
+-          );
++        Eigen::Vector2d xy;
++        WorldToPixel(reconstruction.Camera(image.CameraId()),
++                     image.CamFromWorld(),
++                     reconstruction.Point3D(p2D.point3D_id).xyz, xy.data());
+         // Involves a copy
+         FeaturePatch<dtype> fpatch = fmap.GetFeaturePatch(kDensePatchId).Slice(
+           xy, config_.dense_cut_size);
+@@ -232,7 +231,7 @@ void CostMapExtractor::FillPointCostmap(FeaturePatch<dtype>& fpatch,
+                                         Reference& reference,
+                                         FeaturePatch<dtype_o>& cost_patch) {
+   THROW_CHECK_EQ(fpatch.Channels(), CHANNELS);
+-  THROW_CHECK_EQ(cost_patch.Channels(), config_.GetEffectiveChannels())
++  THROW_CHECK_EQ(cost_patch.Channels(), config_.GetEffectiveChannels());
+ 
+   PatchInterpolator<dtype, CHANNELS, 1> patch_interpolator(
+       interpolation_config_, fpatch);
+@@ -367,7 +366,7 @@ FeatureSet<dtype_o> CostMapExtractor::CreateShallowCostmapFSet(
+   // Get observations which are part of the problem
+   std::unordered_map<colmap::image_t, std::vector<colmap::point2D_t>> req_obs;
+   for (colmap::point3D_t p3D_id : required_p3D_ids) {
+-    const colmap::Track& track = reconstruction.Point3D(p3D_id).Track();
++    const colmap::Track& track = reconstruction.Point3D(p3D_id).track;
+     for (const colmap::TrackElement& track_el : track.Elements()) {
+       req_obs[track_el.image_id].push_back(track_el.point2D_idx);
+     }
+@@ -411,11 +410,10 @@ FeatureSet<dtype_o> CostMapExtractor::CreateShallowCostmapFSet(
+       for (colmap::point2D_t p2D_idx : points_pair.second) {
+         const colmap::Point2D& p2D = image.Point2D(p2D_idx);
+         if (p2D.HasPoint3D()) {
+-          Eigen::Vector2d xy = ProjectPointToImage(
+-            reconstruction.Point3D(p2D.Point3DId()).XYZ(),
+-            image.ProjectionMatrix(),
+-            reconstruction.Camera(image.CameraId())
+-          );
++          Eigen::Vector2d xy;
++          WorldToPixel(reconstruction.Camera(image.CameraId()),
++                       image.CamFromWorld(),
++                       reconstruction.Point3D(p2D.point3D_id).xyz, xy.data());
+           // We extract the corner around the reprojected observation
+           Eigen::Vector2i corner = dense_patch.ToCorner(xy, config_.dense_cut_size);
+           // No Fill, no allocation
+diff --git a/pixsfm/bundle_adjustment/src/feature_reference_bundle_optimizer.h b/pixsfm/bundle_adjustment/src/feature_reference_bundle_optimizer.h
+index dc6b65e..affced9 100644
+--- a/pixsfm/bundle_adjustment/src/feature_reference_bundle_optimizer.h
++++ b/pixsfm/bundle_adjustment/src/feature_reference_bundle_optimizer.h
+@@ -105,20 +105,20 @@ int FeatureReferenceBundleOptimizer::AddResiduals(
+     return 0;
+   }
+ 
+-  colmap::point3D_t point3D_id = point2D.Point3DId();
++  colmap::point3D_t point3D_id = point2D.point3D_id;
+   colmap::Point3D& point3D = reconstruction->Point3D(point3D_id);
+ 
+-  double* qvec_data = image.Qvec().data();
+-  double* tvec_data = image.Tvec().data();
+-  double* camera_params_data = camera.ParamsData();
+-  double* xyz = point3D.XYZ().data();
++  double* qvec_data = QvecData(image);
++  double* tvec_data = TvecData(image);
++  double* camera_params_data = camera.params.data();
++  double* xyz = point3D.xyz.data();
+ 
+   ceres::ResidualBlockId block_id;
+ 
+   if (constant_pose) {
+     ceres::CostFunction* cost_function =
+         CreateFeatureReferenceConstantPoseCostFunctor<CHANNELS, N_NODES, -1>(
+-            camera.ModelId(), qvec_data, tvec_data,
++            camera.model_id, qvec_data, tvec_data,
+             feature_view.GetFeaturePatch(image_id, point2D_idx),
+             references.at(point3D_id).DescriptorData(),
+             references.at(point3D_id).NodeOffsets3DData(),
+@@ -128,7 +128,7 @@ int FeatureReferenceBundleOptimizer::AddResiduals(
+   } else {
+     ceres::CostFunction* cost_function =
+         CreateFeatureReferenceCostFunctor<CHANNELS, N_NODES, -1>(
+-            camera.ModelId(),
++            camera.model_id,
+             feature_view.GetFeaturePatch(image_id, point2D_idx),
+             references.at(point3D_id).DescriptorData(),
+             references.at(point3D_id).NodeOffsets3DData(),
+diff --git a/pixsfm/bundle_adjustment/src/geometric_bundle_optimizer.h b/pixsfm/bundle_adjustment/src/geometric_bundle_optimizer.h
+index 3adfdaa..cacccc6 100644
+--- a/pixsfm/bundle_adjustment/src/geometric_bundle_optimizer.h
++++ b/pixsfm/bundle_adjustment/src/geometric_bundle_optimizer.h
+@@ -54,24 +54,24 @@ int GeometricBundleOptimizer::AddResiduals<>(
+     return 0;
+   }
+ 
+-  colmap::point3D_t point3D_id = point2D.Point3DId();
++  colmap::point3D_t point3D_id = point2D.point3D_id;
+   colmap::Point3D& point3D = reconstruction->Point3D(point3D_id);
+ 
+-  double* qvec_data = image.Qvec().data();
+-  double* tvec_data = image.Tvec().data();
+-  double* camera_params_data = camera.ParamsData();
+-  double* xyz = point3D.XYZ().data();
++  double* qvec_data = QvecData(image);
++  double* tvec_data = TvecData(image);
++  double* camera_params_data = camera.params.data();
++  double* xyz = point3D.xyz.data();
+ 
+   ceres::ResidualBlockId block_id;
+ 
+   if (constant_pose) {
+     ceres::CostFunction* cost_function = CreateGeometricConstantPoseCostFunctor(
+-        camera.ModelId(), image.Qvec(), image.Tvec(), point2D.XY());
++        camera.model_id, MutableCamFromWorld(image), point2D.xy);
+     block_id = problem_->AddResidualBlock(cost_function, loss_function, xyz,
+                                           camera_params_data);
+   } else {
+     ceres::CostFunction* cost_function =
+-        CreateGeometricCostFunctor(camera.ModelId(), point2D.XY());
++        CreateGeometricCostFunctor(camera.model_id, point2D.xy);
+ 
+     block_id =
+         problem_->AddResidualBlock(cost_function, loss_function, qvec_data,
+diff --git a/pixsfm/bundle_adjustment/src/patch_warp_bundle_optimizer.h b/pixsfm/bundle_adjustment/src/patch_warp_bundle_optimizer.h
+index 341bdd2..77771ef 100644
+--- a/pixsfm/bundle_adjustment/src/patch_warp_bundle_optimizer.h
++++ b/pixsfm/bundle_adjustment/src/patch_warp_bundle_optimizer.h
+@@ -110,13 +110,13 @@ int PatchWarpBundleOptimizer::AddResiduals(
+     return 0;
+   }
+ 
+-  colmap::point3D_t point3D_id = point2D.Point3DId();
++  colmap::point3D_t point3D_id = point2D.point3D_id;
+   colmap::Point3D& point3D = reconstruction->Point3D(point3D_id);
+ 
+-  double* qvec_data = image.Qvec().data();
+-  double* tvec_data = image.Tvec().data();
+-  double* camera_params_data = camera.ParamsData();
+-  double* xyz = point3D.XYZ().data();
++  double* qvec_data = QvecData(image);
++  double* tvec_data = TvecData(image);
++  double* camera_params_data = camera.params.data();
++  double* xyz = point3D.xyz.data();
+ 
+   ceres::ResidualBlockId block_id;
+ 
+@@ -126,16 +126,16 @@ int PatchWarpBundleOptimizer::AddResiduals(
+   colmap::Image& src_image = reconstruction->Image(src_image_id);
+   colmap::Camera& src_camera = reconstruction->Camera(src_image.CameraId());
+ 
+-  double* src_qvec_data = src_image.Qvec().data();
+-  double* src_tvec_data = src_image.Tvec().data();
+-  double* src_camera_params_data = src_camera.ParamsData();
++  double* src_qvec_data = QvecData(src_image);
++  double* src_tvec_data = TvecData(src_image);
++  double* src_camera_params_data = src_camera.params.data();
+ 
+   if (src_image_id == image_id) {
+     // INTERNAL FUNCTION //
+     if (src_point2D_idx == point2D_idx && options_.regularize_source) {
+       ceres::CostFunction* cost_function =
+           CreateFeatureReferenceCostFunctor<CHANNELS, N_NODES, -1>(
+-              camera.ModelId(),
++              camera.model_id,
+               feature_view.GetFeaturePatch(image_id, src_point2D_idx),
+               references.at(point3D_id).DescriptorData(),
+               references.at(point3D_id).NodeOffsets3DData(),
+@@ -152,11 +152,11 @@ int PatchWarpBundleOptimizer::AddResiduals(
+     // TODO: reduced system when poses are fixed
+     // ATM: Just set pose parameters constant (see bundle_adjuster.h)
+ 
+-    if (camera.CameraId() == src_camera.CameraId()) {
++    if (camera.camera_id == src_camera.camera_id) {
+       // Shared intrinsics
+       ceres::CostFunction* cost_function =
+           CreateFeatureMetricSharedIntrinsicsCostFunctor<CHANNELS, N_NODES>(
+-              camera.ModelId(),
++              camera.model_id,
+               feature_view.GetFeaturePatch(image_id, point2D_idx),
+               feature_view.GetFeaturePatch(src_image_id, src_point2D_idx),
+               interpolation_config_);
+@@ -166,9 +166,9 @@ int PatchWarpBundleOptimizer::AddResiduals(
+     } else {
+       ceres::CostFunction* cost_function =
+           CreateFeatureMetricCostFunctor<CHANNELS, N_NODES>(
+-              camera.ModelId(),
++              camera.model_id,
+               feature_view.GetFeaturePatch(image_id, point2D_idx),
+-              src_camera.ModelId(),
++              src_camera.model_id,
+               feature_view.GetFeaturePatch(src_image_id, src_point2D_idx),
+               interpolation_config_);
+       block_id = problem_->AddResidualBlock(
+diff --git a/pixsfm/bundle_adjustment/src/reference_extractor.h b/pixsfm/bundle_adjustment/src/reference_extractor.h
+index 70e38a6..0a46c32 100644
+--- a/pixsfm/bundle_adjustment/src/reference_extractor.h
++++ b/pixsfm/bundle_adjustment/src/reference_extractor.h
+@@ -13,7 +13,7 @@ namespace py = pybind11;
+ #include <Eigen/Dense>
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/projection.h>
++#include <colmap/scene/projection.h>
+ #include <colmap/util/timer.h>
+ #include <colmap/util/types.h>
+ 
+@@ -178,8 +178,8 @@ ReferenceExtractor::GetVisibleObservations(
+   // Construct visible track
+   colmap::Track visible_track;
+   std::vector<Eigen::Vector2d> xys;
+-  // xys.reserve(point3D.Track().Length());
+-  for (auto& track_el : point3D.Track().Elements()) {
++  // xys.reserve(point3D.track.Length());
++  for (auto& track_el : point3D.track.Elements()) {
+     colmap::image_t image_id = track_el.image_id;
+     colmap::point2D_t point2D_idx = track_el.point2D_idx;
+ 
+@@ -197,8 +197,7 @@ ReferenceExtractor::GetVisibleObservations(
+     const colmap::Camera& camera = reconstruction->Camera(image.CameraId());
+ 
+     Eigen::Vector2d projected;
+-    WorldToPixel(camera, image.Qvec(), image.Tvec(), point3D.XYZ(),
+-                 projected.data());
++    WorldToPixel(camera, image.CamFromWorld(), point3D.xyz, projected.data());
+     xys.push_back(projected);
+   }
+   return std::make_pair(visible_track, xys);
+@@ -277,7 +276,7 @@ Reference ReferenceExtractor::ComputeReference(
+           reconstruction->Image(track.Element(ref_idx).image_id);
+       const colmap::Camera& camera = reconstruction->Camera(image.CameraId());
+       auto node_offsets = NodeOffsets3D<N_NODES>(
+-          image, camera, reconstruction->Point3D(point3D_id).XYZ(),
++          image, camera, reconstruction->Point3D(point3D_id).xyz,
+           interpolation_config_);
+ 
+       return Reference(
+@@ -338,24 +337,27 @@ OffsetMatrix3d<N_NODES> NodeOffsets3D(
+   } else {
+     assert(N_NODES == interpolation_config.nodes.size());
+   }
+-  const auto& Tmat = image.ProjectionMatrix();
++  const colmap::Rigid3d cam_from_world = image.CamFromWorld();
++  const colmap::Rigid3d world_from_cam = colmap::Inverse(cam_from_world);
+ 
+-  Eigen::Vector2d projected = colmap::ProjectPointToImage(xyz, Tmat, camera);
++  Eigen::Vector2d projected;
++  WorldToPixel(camera, cam_from_world, xyz, projected.data());
+ 
+   double depth;
+-  CalculateDepth(image.Qvec().data(), image.Tvec().data(), xyz.data(), &depth);
++  CalculateDepth(cam_from_world.params.data(),
++                 cam_from_world.params.data() + 4, xyz.data(), &depth);
+ 
+   for (int i = 0; i < interpolation_config.nodes.size(); i++) {
+     Eigen::Vector2d projected_node = projected;
+     projected_node(0) += interpolation_config.nodes[i][0];
+     projected_node(1) += interpolation_config.nodes[i][1];
+ 
+-    Eigen::Vector2d xy = camera.ImageToWorld(projected_node);
+-    Eigen::Vector3d xyz_node{xy(0), xy(1), 1.0};
++    const std::optional<Eigen::Vector2d> xy = camera.CamFromImg(projected_node);
++    THROW_CHECK_MSG(xy.has_value(), "Failed to unproject node.");
++    Eigen::Vector3d xyz_node{(*xy)(0), (*xy)(1), 1.0};
+ 
+     xyz_node = xyz_node * depth;
+-    Eigen::Vector3d res =
+-        image.RotationMatrix().transpose() * (xyz_node - image.Tvec()) - xyz;
++    Eigen::Vector3d res = world_from_cam * xyz_node - xyz;
+ 
+     offsets.row(i) = res.transpose();
+   }
+diff --git a/pixsfm/eval/eth3d/localization.py b/pixsfm/eval/eth3d/localization.py
+index 6d8db7c..ab1bd07 100644
+--- a/pixsfm/eval/eth3d/localization.py
++++ b/pixsfm/eval/eth3d/localization.py
+@@ -29,17 +29,11 @@ from .config import DATASET_PATH, OUTPUTS_PATH, match_configs, feature_configs
+ 
+ def copy_reconstruction_empty(rec: pycolmap.Reconstruction, target_path: Path,
+                               exclude_images: Set[str] = set()):
+-    target = pycolmap.Reconstruction()
+-    for _, camera in rec.cameras.items():
+-        target.add_camera(camera)
+-    for _, image in rec.images.items():
+-        if image.name in exclude_images:
+-            continue
+-        image = deepcopy(image)
+-        image.points2D.clear()
+-        target.add_image(image)
+-        target.register_image(image.image_id)
+-    target.check()
++    target = deepcopy(rec)
++    for _, image in target.images.items():
++        if image.name in exclude_images and image.has_pose:
++            target.deregister_frame(image.frame_id)
++    target.delete_all_points2D_and_points3D()
+     target.write_binary(str(target_path))
+ 
+ 
+@@ -111,13 +105,12 @@ def get_query_matches(name, pairs, matches_path, reconstruction,
+ 
+ 
+ def compute_pose_error(image_gt: pycolmap.Image, pose_dict: Dict[str, Any]):
+-    if pose_dict['success']:
+-        R_w2c_gt = image_gt.rotmat()
++    if pose_dict is not None:
++        R_w2c_gt = image_gt.cam_from_world().rotation.matrix()
+         t_c2w_gt = image_gt.projection_center()
+-        image = pycolmap.Image(
+-            "dummy", qvec=pose_dict['qvec'], tvec=pose_dict['tvec'])
+-        R_w2c = image.rotmat()
+-        t_c2w = image.projection_center()
++        cam_from_world = pose_dict['cam_from_world']
++        R_w2c = cam_from_world.rotation.matrix()
++        t_c2w = cam_from_world.inverse().translation
+ 
+         dt = np.linalg.norm(t_c2w_gt - t_c2w)
+         cos = np.clip(((np.trace(R_w2c_gt @ R_w2c.T)) - 1) / 2, -1, 1)
+diff --git a/pixsfm/extract.py b/pixsfm/extract.py
+index 892cf13..4a19660 100644
+--- a/pixsfm/extract.py
++++ b/pixsfm/extract.py
+@@ -164,7 +164,7 @@ def features_from_reconstruction(
+     for image_id, image in reconstruction.images.items():
+         cam = reconstruction.cameras[image.camera_id]
+         # @TODO: Add function in pycolmap that performs next 3 lines in C++
+-        if image.num_points3D() <= 0:
++        if image.num_points3D <= 0:
+             continue
+         else:
+             keypoint_ids, p3D_ids = zip(*[(p2D_id, p2D.point3D_id) for
+@@ -172,9 +172,11 @@ def features_from_reconstruction(
+                                           enumerate(image.points2D)
+                                           if p2D.has_point3D()])
+ 
+-            required_point3Ds = [reconstruction.points3D[i] for i in p3D_ids]
+-            projected_keypoints = cam.world_to_image(image.project(
+-                                                            required_point3Ds))
++            required_xyz = np.array(
++                [reconstruction.points3D[i].xyz for i in p3D_ids])
++            points_cam = image.cam_from_world() * required_xyz
++            projected_keypoints = cam.img_from_cam(
++                points_cam / points_cam[:, 2:])
+             image_list.append(image.name)
+ 
+             keypoints = np.zeros((image.num_points2D(), 2), dtype=np.float64)
+diff --git a/pixsfm/features/src/featuremap.cc b/pixsfm/features/src/featuremap.cc
+index f3679c3..1dd6904 100644
+--- a/pixsfm/features/src/featuremap.cc
++++ b/pixsfm/features/src/featuremap.cc
+@@ -226,7 +226,7 @@ size_t FeatureMap<dtype>::LoadFromH5GroupChunked(
+     std::vector<colmap::point2D_t>* point2D_ids) {
+   size_t num_bytes = 0;
+   if (fill) {
+-    THROW_CHECK(!p2D_idx_to_h5id_.empty())
++    THROW_CHECK(!p2D_idx_to_h5id_.empty());
+     HighFive::DataSet patches_dataset = group.getDataSet("patches");
+     std::vector<size_t> shape = patches_dataset.getDimensions();
+ 
+diff --git a/pixsfm/features/src/featureset.h b/pixsfm/features/src/featureset.h
+index 2365a1d..9f68a78 100644
+--- a/pixsfm/features/src/featureset.h
++++ b/pixsfm/features/src/featureset.h
+@@ -11,7 +11,7 @@ namespace py = pybind11;
+ #include <highfive/H5File.hpp>
+ #include <highfive/H5Group.hpp>
+ 
+-#include <colmap/base/reconstruction.h>
++#include <colmap/scene/reconstruction.h>
+ #include <colmap/util/logging.h>
+ #include <colmap/util/types.h>
+ 
+diff --git a/pixsfm/features/src/featureview.cc b/pixsfm/features/src/featureview.cc
+index fc81350..184b73a 100644
+--- a/pixsfm/features/src/featureview.cc
++++ b/pixsfm/features/src/featureview.cc
+@@ -104,7 +104,7 @@ FeatureView<dtype>::FeatureView(
+     req_patches_.emplace(image_name, std::vector<colmap::point2D_t>(0));
+   }
+   for (const colmap::point3D_t& point3D_id : point3D_ids) {
+-    const colmap::Track& track = reconstruction->Point3D(point3D_id).Track();
++    const colmap::Track& track = reconstruction->Point3D(point3D_id).track;
+     for (auto& track_el : track.Elements()) {
+       colmap::image_t image_id = track_el.image_id;
+       req_patches_[image_id_to_name_[image_id]].push_back(track_el.point2D_idx);
+diff --git a/pixsfm/features/src/featureview.h b/pixsfm/features/src/featureview.h
+index 4eddeda..41d2fea 100644
+--- a/pixsfm/features/src/featureview.h
++++ b/pixsfm/features/src/featureview.h
+@@ -5,7 +5,7 @@
+ 
+ namespace py = pybind11;
+ 
+-#include <colmap/base/reconstruction.h>
++#include <colmap/scene/reconstruction.h>
+ #include <colmap/util/logging.h>
+ #include <colmap/util/types.h>
+ 
+diff --git a/pixsfm/features/src/references.h b/pixsfm/features/src/references.h
+index d3debfe..f3fa670 100644
+--- a/pixsfm/features/src/references.h
++++ b/pixsfm/features/src/references.h
+@@ -10,7 +10,7 @@ namespace py = pybind11;
+ #include <highfive/H5File.hpp>
+ #include <highfive/H5Group.hpp>
+ 
+-#include <colmap/base/track.h>
++#include <colmap/scene/track.h>
+ #include <colmap/util/types.h>
+ 
+ #include "util/src/log_exceptions.h"
+diff --git a/pixsfm/keypoint_adjustment/src/keypoint_optimizer.h b/pixsfm/keypoint_adjustment/src/keypoint_optimizer.h
+index 1d51c2f..baafbd5 100644
+--- a/pixsfm/keypoint_adjustment/src/keypoint_optimizer.h
++++ b/pixsfm/keypoint_adjustment/src/keypoint_optimizer.h
+@@ -11,10 +11,10 @@ namespace py = pybind11;
+ #include <highfive/H5Group.hpp>
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/projection.h>
+-#include <colmap/base/reconstruction.h>
+-#include <colmap/optim/bundle_adjustment.h>
+-#include <colmap/util/alignment.h>
++#include <colmap/scene/projection.h>
++#include <colmap/scene/reconstruction.h>
++#include <colmap/estimators/bundle_adjustment.h>
++#include <colmap/util/eigen_alignment.h>
+ #include <colmap/util/logging.h>
+ #include <colmap/util/misc.h>
+ #include <colmap/util/threading.h>
+diff --git a/pixsfm/keypoint_adjustment/src/topological_keypoint_optimizer.h b/pixsfm/keypoint_adjustment/src/topological_keypoint_optimizer.h
+index c0387f0..516ca1a 100644
+--- a/pixsfm/keypoint_adjustment/src/topological_keypoint_optimizer.h
++++ b/pixsfm/keypoint_adjustment/src/topological_keypoint_optimizer.h
+@@ -3,10 +3,10 @@
+ #include "_pixsfm/src/helpers.h"
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/projection.h>
+-#include <colmap/base/reconstruction.h>
+-#include <colmap/optim/bundle_adjustment.h>
+-#include <colmap/util/alignment.h>
++#include <colmap/scene/projection.h>
++#include <colmap/scene/reconstruction.h>
++#include <colmap/estimators/bundle_adjustment.h>
++#include <colmap/util/eigen_alignment.h>
+ #include <colmap/util/logging.h>
+ #include <colmap/util/misc.h>
+ #include <colmap/util/threading.h>
+diff --git a/pixsfm/localization/bindings.cc b/pixsfm/localization/bindings.cc
+index 714f884..48816e7 100644
+--- a/pixsfm/localization/bindings.cc
++++ b/pixsfm/localization/bindings.cc
+@@ -15,21 +15,21 @@ namespace pixsfm {
+ template <typename dtype, typename T>
+ void BindSingleQueryBundleOptimizer(py::class_<T>& sqba) {
+   sqba.def("run", &T::template RunQuery<dtype, std::vector<Reference>>,
+-           py::arg("qvec").noconvert(), py::arg("tvec").noconvert(),
++           py::arg("cam_from_world").noconvert(),
+            py::arg("camera").noconvert(), py::arg("points3D"),
+            py::arg("fmap").noconvert(), py::arg("references"),
+            py::arg("patch_idxs") = py::none(), py::arg("inliers") = py::none());
+   sqba.def(
+       "run",
+       &T::template RunQuery<dtype, std::vector<Eigen::Ref<DescriptorMatrixXd>>>,
+-      py::arg("qvec").noconvert(), py::arg("tvec").noconvert(),
++      py::arg("cam_from_world").noconvert(),
+       py::arg("camera").noconvert(), py::arg("points3D"),
+       py::arg("fmap").noconvert(), py::arg("references"),
+       py::arg("patch_idxs") = py::none(), py::arg("inliers") = py::none());
+   sqba.def("run",
+            &T::template RunQuery<dtype,
+                                  std::vector<std::vector<DescriptorMatrixXd>>>,
+-           py::arg("qvec").noconvert(), py::arg("tvec").noconvert(),
++           py::arg("cam_from_world").noconvert(),
+            py::arg("camera").noconvert(), py::arg("points3D"),
+            py::arg("fmap").noconvert(), py::arg("references"),
+            py::arg("patch_idxs") = py::none(), py::arg("inliers") = py::none());
+diff --git a/pixsfm/localization/main.py b/pixsfm/localization/main.py
+index 47d6487..87a2d75 100644
+--- a/pixsfm/localization/main.py
++++ b/pixsfm/localization/main.py
+@@ -63,11 +63,11 @@ def find_unique_min_by_group(errors, idxs, pre_inliers=None):
+ 
+ 
+ def find_unique_min_reproj_inliers(
+-        pnp_points3D_id, qvec, tvec, camera, pnp_points2D, rec,
++        pnp_points3D_id, cam_from_world, camera, pnp_points2D, rec,
+         pre_inliers=None, point2D_idxs=None):
+-    p3Ds = [rec.points3D[p3D_id] for p3D_id in pnp_points3D_id]
++    p3Ds = [rec.points3D[p3D_id].xyz for p3D_id in pnp_points3D_id]
+     errors = compute_reprojection_errors(
+-        pnp_points2D, p3Ds, qvec, tvec, camera
++        pnp_points2D, p3Ds, cam_from_world, camera
+     )
+     inliers = pre_inliers
+     for idxs in [pnp_points3D_id, point2D_idxs]:
+@@ -79,9 +79,11 @@ def find_unique_min_reproj_inliers(
+ 
+ def compute_reprojection_errors(
+         pnp_points2D, pnp_points3D,
+-        qvec, tvec, camera):
+-    proj = camera.world_to_image(
+-        pycolmap.Image(qvec=qvec, tvec=tvec).project(pnp_points3D))
++        cam_from_world, camera):
++    points_cam = cam_from_world * np.asarray(pnp_points3D, dtype=np.float64)
++    # Project onto the normalized image plane without cheirality check.
++    points_cam = points_cam / points_cam[:, 2:]
++    proj = camera.img_from_cam(points_cam)
+     return [np.linalg.norm(proj[i] - p2D)
+             for i, p2D in enumerate(pnp_points2D)]
+ 
+@@ -228,8 +230,7 @@ class QueryBundleAdjuster:
+ 
+     def refine(
+             self,
+-            qvec: np.ndarray,
+-            tvec: np.ndarray,
++            cam_from_world: pycolmap.Rigid3d,  # refined in-place
+             camera: pycolmap.Camera,
+             points3D: List[np.ndarray],
+             fmap: features.FeatureMap,
+@@ -237,13 +238,12 @@ class QueryBundleAdjuster:
+             inliers:  Optional[List[bool]] = None,
+             point2D_idxs:  Optional[List[int]] = None):
+         return self.solver.run(
+-            qvec, tvec, camera, points3D,
++            cam_from_world, camera, points3D,
+             fmap, references, inliers=inliers, patch_idxs=point2D_idxs)
+ 
+     def refine_multilevel(
+             self,
+-            qvec: np.ndarray,  # [3,1]
+-            tvec: np.ndarray,  # [3,1]
++            cam_from_world: pycolmap.Rigid3d,  # refined in-place
+             camera: pycolmap.Camera,
+             points3D: List[np.ndarray],
+             fmaps: List[features.FeatureMap],
+@@ -253,7 +253,7 @@ class QueryBundleAdjuster:
+         assert (len(fmaps) == len(references))
+         levels = resolve_level_indices(self.conf.level_indices, len(fmaps))
+         for level in levels:
+-            self.refine(qvec, tvec, camera, points3D, fmaps[level],
++            self.refine(cam_from_world, camera, points3D, fmaps[level],
+                         references[level], inliers=inliers,
+                         point2D_idxs=point2D_idxs)
+ 
+@@ -422,7 +422,7 @@ class QueryLocalizer:
+         assert (len(pnp_point2D_idxs) == len(pnp_points3D_id))
+         assert (image_path is not None or query_fmaps is not None)
+         if len(pnp_point2D_idxs) == 0:
+-            return {"success": False}
++            return None
+         pnp_points3D = [self.reconstruction.points3D[p3D_id].xyz
+                         for p3D_id in pnp_points3D_id]
+ 
+@@ -455,23 +455,23 @@ class QueryLocalizer:
+         # Run PnP
+         logger.info(f"Running PnP with {pnp_points2D.shape[0]} "
+                     "correspondences.")
+-        pose_dict = pycolmap.absolute_pose_estimation(
+-            pnp_points2D, pnp_points3D, query_camera,
++        pose_dict = pycolmap.estimate_and_refine_absolute_pose(
++            pnp_points2D, np.array(pnp_points3D), query_camera,
+             estimation_options=to_ctr(self.conf.PnP.estimation),
+             refinement_options=to_ctr(self.conf.PnP.refinement))
+ 
+-        if not pose_dict["success"]:
+-            return pose_dict
++        if pose_dict is None:
++            return None
+ 
+         # For QBA we optionally select unique 2D-3D correspondences
+-        inliers = pose_dict["inliers"]
++        inliers = list(pose_dict["inlier_mask"])
+         if self.conf.unique_inliers:  # Checks None and False
+             if self.conf.unique_inliers == "random":
+                 inliers = find_unique_inliers(pnp_points3D_id,
+                                               pre_inliers=inliers)
+             elif self.conf.unique_inliers == "min_error":
+                 inliers = find_unique_min_reproj_inliers(
+-                    pnp_points3D_id, pose_dict["qvec"], pose_dict["tvec"],
++                    pnp_points3D_id, pose_dict["cam_from_world"],
+                     query_camera, pnp_points2D, self.reconstruction,
+                     pre_inliers=inliers, point2D_idxs=pnp_point2D_idxs)
+             else:
+@@ -482,19 +482,20 @@ class QueryLocalizer:
+         # Run QBA
+         if self.conf.QBA.apply:
+             self.query_bundle_adjuster.refine_multilevel(
+-                pose_dict["qvec"], pose_dict["tvec"], query_camera,
++                pose_dict["cam_from_world"], query_camera,
+                 pnp_points3D, query_fmaps, query_references,
+                 inliers=inliers, point2D_idxs=pnp_point2D_idxs
+             )
+ 
+         # We recompute the inliers from the final pose
+         reprojection_errors = compute_reprojection_errors(
+-            pnp_points2D, pnp_points3D, pose_dict["qvec"], pose_dict["tvec"],
++            pnp_points2D, pnp_points3D, pose_dict["cam_from_world"],
+             query_camera
+         )
+         max_error = self.conf.PnP.estimation.ransac.max_error
+-        pose_dict["inliers"] = [err < max_error for err in reprojection_errors]
+-        pose_dict["num_inliers"] = sum(pose_dict["inliers"])
++        pose_dict["inlier_mask"] = np.array(
++            [err < max_error for err in reprojection_errors])
++        pose_dict["num_inliers"] = int(pose_dict["inlier_mask"].sum())
+ 
+         return pose_dict
+ 
+diff --git a/pixsfm/localization/src/nearest_references.h b/pixsfm/localization/src/nearest_references.h
+index c1f922b..d831be5 100644
+--- a/pixsfm/localization/src/nearest_references.h
++++ b/pixsfm/localization/src/nearest_references.h
+@@ -1,8 +1,8 @@
+ #pragma once
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/reconstruction.h>
+-#include <colmap/optim/bundle_adjustment.h>
++#include <colmap/scene/reconstruction.h>
++#include <colmap/estimators/bundle_adjustment.h>
+ #include <colmap/util/types.h>
+ 
+ #include <vector>
+diff --git a/pixsfm/localization/src/query_bundle_optimizer.h b/pixsfm/localization/src/query_bundle_optimizer.h
+index 7963d7f..e20732d 100644
+--- a/pixsfm/localization/src/query_bundle_optimizer.h
++++ b/pixsfm/localization/src/query_bundle_optimizer.h
+@@ -8,9 +8,9 @@
+ namespace py = pybind11;
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/reconstruction.h>
+-#include <colmap/base/cost_functions.h>
+-#include <colmap/optim/bundle_adjustment.h>
++#include <colmap/scene/reconstruction.h>
++#include <colmap/estimators/cost_functions/manifold.h>
++#include <colmap/estimators/bundle_adjustment.h>
+ #include <colmap/util/logging.h>
+ #include <colmap/util/misc.h>
+ #include <colmap/util/threading.h>
+@@ -47,7 +47,7 @@ class QueryBundleOptimizer {
+ 
+   template <int CHANNELS, int N_NODES, typename dtype>
+   inline ceres::ResidualBlockId AddFeatureReferenceResidual(
+-      ceres::Problem* problem, int camera_model_id, double* camera_params_data,
++      ceres::Problem* problem, colmap::CameraModelId camera_model_id, double* camera_params_data,
+       double* qvec_data, double* tvec_data, double* xyz_data,
+       const double* reference_descriptor_data,
+       const double* node_offsets3D,  // CAN BE NULL if N_NODES==1
+@@ -55,7 +55,7 @@ class QueryBundleOptimizer {
+ 
+   template <typename dtype>
+   inline ceres::ResidualBlockId AddFeatureReferenceResidual(
+-      ceres::Problem* problem, int camera_model_id, double* camera_params_data,
++      ceres::Problem* problem, colmap::CameraModelId camera_model_id, double* camera_params_data,
+       double* qvec_data, double* tvec_data, double* xyz_data,
+       const double* reference_descriptor_data,
+       const double* node_offsets3D,  // CAN BE NULL if N_NODES==1
+@@ -94,7 +94,7 @@ bool QueryBundleOptimizer::SolveProblem(ceres::Problem* problem) {
+   }
+ 
+   if (options_.print_summary) {
+-    colmap::PrintHeading2("Query Bundle adjustment report");
++    PrintHeading2("Query Bundle adjustment report");
+     PrintSolverSummary(
+         summary);  // We need to replace this with our own Printer!!!
+   }
+@@ -115,43 +115,41 @@ void QueryBundleOptimizer::ParameterizeQuery(ceres::Problem* problem,
+                                              colmap::Camera& camera,
+                                              double* qvec, double* tvec) {
+   // Parametrize Extrinsics
+-  colmap::SetQuaternionManifold(problem, qvec);
++  colmap::SetManifold(problem, qvec, colmap::CreateEigenQuaternionManifold());
+ 
+   // Parametrize Intrinsics
+   const bool constant_camera = !options_.refine_focal_length &&
+                                !options_.refine_principal_point &&
+                                !options_.refine_extra_params;
+   if (constant_camera) {
+-    problem->SetParameterBlockConstant(camera.ParamsData());
++    problem->SetParameterBlockConstant(camera.params.data());
+   } else {
+     std::vector<int> const_camera_params;
+     if (!options_.refine_focal_length) {
+-      const std::vector<size_t>& params_idxs = camera.FocalLengthIdxs();
++      const auto params_idxs = camera.FocalLengthIdxs();
+       const_camera_params.insert(const_camera_params.end(), params_idxs.begin(),
+                                  params_idxs.end());
+     }
+     if (!options_.refine_principal_point) {
+-      const std::vector<size_t>& params_idxs = camera.PrincipalPointIdxs();
++      const auto params_idxs = camera.PrincipalPointIdxs();
+       const_camera_params.insert(const_camera_params.end(), params_idxs.begin(),
+                                  params_idxs.end());
+     }
+     if (!options_.refine_extra_params) {
+-      const std::vector<size_t>& params_idxs = camera.ExtraParamsIdxs();
++      const auto params_idxs = camera.ExtraParamsIdxs();
+       const_camera_params.insert(const_camera_params.end(), params_idxs.begin(),
+                                  params_idxs.end());
+     }
+ 
+     if (const_camera_params.size() > 0) {
+-      colmap::SetSubsetManifold(static_cast<int>(camera.NumParams()),
+-                                const_camera_params, problem,
+-                                camera.ParamsData());
++      colmap::SetManifold(problem, camera.params.data(), colmap::CreateSubsetManifold(static_cast<int>(camera.params.size()), const_camera_params));
+     }
+   }
+ }
+ 
+ template <typename dtype>
+ ceres::ResidualBlockId QueryBundleOptimizer::AddFeatureReferenceResidual(
+-    ceres::Problem* problem, int camera_model_id, double* camera_params_data,
++    ceres::Problem* problem, colmap::CameraModelId camera_model_id, double* camera_params_data,
+     double* qvec_data, double* tvec_data, double* xyz_data,
+     const double* reference_descriptor_data,
+     const double* node_offsets3D,  // CAN BE NULL if N_NODES==1
+@@ -171,7 +169,7 @@ ceres::ResidualBlockId QueryBundleOptimizer::AddFeatureReferenceResidual(
+ 
+ template <int CHANNELS, int N_NODES, typename dtype>
+ ceres::ResidualBlockId QueryBundleOptimizer::AddFeatureReferenceResidual(
+-    ceres::Problem* problem, int camera_model_id, double* camera_params_data,
++    ceres::Problem* problem, colmap::CameraModelId camera_model_id, double* camera_params_data,
+     double* qvec_data, double* tvec_data, double* xyz_data,
+     const double* reference_descriptor_data,
+     const double* node_offsets3D,  // CAN BE NULL if N_NODES==1
+diff --git a/pixsfm/localization/src/query_keypoint_optimizer.h b/pixsfm/localization/src/query_keypoint_optimizer.h
+index be604d2..17fab66 100644
+--- a/pixsfm/localization/src/query_keypoint_optimizer.h
++++ b/pixsfm/localization/src/query_keypoint_optimizer.h
+@@ -7,7 +7,7 @@
+ namespace py = pybind11;
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/optim/bundle_adjustment.h>
++#include <colmap/estimators/bundle_adjustment.h>
+ #include <colmap/util/logging.h>
+ #include <colmap/util/misc.h>
+ #include <colmap/util/threading.h>
+@@ -89,7 +89,7 @@ bool QueryKeypointOptimizer::SolveProblem(ceres::Problem* problem) {
+   }
+ 
+   if (options_.print_summary) {
+-    colmap::PrintHeading2("Query Keypoint Adjustment Report");
++    PrintHeading2("Query Keypoint Adjustment Report");
+     PrintSolverSummary(
+         summary);  // We need to replace this with our own Printer!!!
+   }
+diff --git a/pixsfm/localization/src/single_query_bundle_optimizer.h b/pixsfm/localization/src/single_query_bundle_optimizer.h
+index 14d97d7..47eb2da 100644
+--- a/pixsfm/localization/src/single_query_bundle_optimizer.h
++++ b/pixsfm/localization/src/single_query_bundle_optimizer.h
+@@ -2,8 +2,9 @@
+ #pragma once
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/reconstruction.h>
+-#include <colmap/optim/bundle_adjustment.h>
++#include <colmap/geometry/rigid3.h>
++#include <colmap/scene/reconstruction.h>
++#include <colmap/estimators/bundle_adjustment.h>
+ #include <colmap/util/types.h>
+ 
+ #include "base/src/interpolation.h"
+@@ -35,32 +36,28 @@ class SingleQueryBundleOptimizer : public QueryBundleOptimizer {
+       : QueryBO::QueryBundleOptimizer(options, interpolation_config) {}
+ 
+   template <typename dtype, typename RefType>
+-  bool RunQuery(Eigen::Ref<Eigen::Vector4d>& qvec,
+-                Eigen::Ref<Eigen::Vector3d>& tvec, colmap::Camera& camera,
++  bool RunQuery(colmap::Rigid3d& cam_from_world, colmap::Camera& camera,
+                 std::vector<Eigen::Vector3d>& points3D, FeatureMap<dtype>& fmap,
+                 RefType& references,
+                 std::vector<colmap::point2D_t>* patch_idxs = NULL,
+                 std::vector<bool>* inliers = NULL);
+ 
+   template <int CHANNELS, int N_NODES, typename dtype>
+-  bool RunQuery(Eigen::Ref<Eigen::Vector4d>& qvec,
+-                Eigen::Ref<Eigen::Vector3d>& tvec, colmap::Camera& camera,
++  bool RunQuery(colmap::Rigid3d& cam_from_world, colmap::Camera& camera,
+                 std::vector<Eigen::Vector3d>& points3D, FeatureMap<dtype>& fmap,
+                 std::vector<Eigen::Ref<DescriptorMatrixXd>>& references,
+                 std::vector<colmap::point2D_t>* patch_idxs = NULL,
+                 std::vector<bool>* inliers = NULL);
+ 
+   template <int CHANNELS, int N_NODES, typename dtype>
+-  bool RunQuery(Eigen::Ref<Eigen::Vector4d>& qvec,
+-                Eigen::Ref<Eigen::Vector3d>& tvec, colmap::Camera& camera,
++  bool RunQuery(colmap::Rigid3d& cam_from_world, colmap::Camera& camera,
+                 std::vector<Eigen::Vector3d>& points3D, FeatureMap<dtype>& fmap,
+                 std::vector<Reference>& references,
+                 std::vector<colmap::point2D_t>* patch_idxs = NULL,
+                 std::vector<bool>* inliers = NULL);
+ 
+   template <int CHANNELS, int N_NODES, typename dtype>
+-  bool RunQuery(Eigen::Ref<Eigen::Vector4d>& qvec,
+-                Eigen::Ref<Eigen::Vector3d>& tvec, colmap::Camera& camera,
++  bool RunQuery(colmap::Rigid3d& cam_from_world, colmap::Camera& camera,
+                 std::vector<Eigen::Vector3d>& points3D, FeatureMap<dtype>& fmap,
+                 std::vector<std::vector<DescriptorMatrixXd>>& references,
+                 std::vector<colmap::point2D_t>* patch_idxs = NULL,
+@@ -69,18 +66,18 @@ class SingleQueryBundleOptimizer : public QueryBundleOptimizer {
+ 
+ template <typename dtype, typename RefType>
+ bool SingleQueryBundleOptimizer::RunQuery(
+-    Eigen::Ref<Eigen::Vector4d>& qvec, Eigen::Ref<Eigen::Vector3d>& tvec,
++    colmap::Rigid3d& cam_from_world,
+     colmap::Camera& camera, std::vector<Eigen::Vector3d>& points3D,
+     FeatureMap<dtype>& fmap, RefType& references,
+     std::vector<colmap::point2D_t>* patch_idxs, std::vector<bool>* inliers) {
+   size_t channels = fmap.Channels();
+   size_t n_nodes = interpolation_config_.nodes.size();
+   if (patch_idxs) {
+-    THROW_CHECK_EQ(patch_idxs->size(), points3D.size())
++    THROW_CHECK_EQ(patch_idxs->size(), points3D.size());
+   }
+ #define REGISTER_METHOD(CHANNELS, N_NODES)                                 \
+   if (channels == CHANNELS && n_nodes == N_NODES) {                        \
+-    return RunQuery<CHANNELS, N_NODES>(qvec, tvec, camera, points3D, fmap, \
++    return RunQuery<CHANNELS, N_NODES>(cam_from_world, camera, points3D, fmap, \
+                                        references, patch_idxs, inliers);   \
+   }
+   FEATURE_REFERENCE_CASES
+@@ -89,7 +86,7 @@ bool SingleQueryBundleOptimizer::RunQuery(
+ 
+ template <int CHANNELS, int N_NODES, typename dtype>
+ bool SingleQueryBundleOptimizer::RunQuery(
+-    Eigen::Ref<Eigen::Vector4d>& qvec, Eigen::Ref<Eigen::Vector3d>& tvec,
++    colmap::Rigid3d& cam_from_world,
+     colmap::Camera& camera, std::vector<Eigen::Vector3d>& points3D,
+     FeatureMap<dtype>& fmap,
+     std::vector<Eigen::Ref<DescriptorMatrixXd>>& references,
+@@ -116,20 +113,20 @@ bool SingleQueryBundleOptimizer::RunQuery(
+     }
+ 
+     QueryBO::AddFeatureReferenceResidual<CHANNELS, N_NODES>(
+-        &problem, camera.ModelId(), camera.ParamsData(), qvec.data(),
+-        tvec.data(), points3D[idx].data(), references[idx].data(), NULL,
++        &problem, camera.model_id, camera.params.data(), cam_from_world.params.data(),
++        (cam_from_world.params.data() + 4), points3D[idx].data(), references[idx].data(), NULL,
+         fmap.GetFeaturePatch(patch_idx), loss_function);
+     problem.SetParameterBlockConstant(points3D[idx].data());
+   }
+ 
+-  QueryBO::ParameterizeQuery(&problem, camera, qvec.data(), tvec.data());
++  QueryBO::ParameterizeQuery(&problem, camera, cam_from_world.params.data(), (cam_from_world.params.data() + 4));
+ 
+   return QueryBO::SolveProblem(&problem);
+ }
+ 
+ template <int CHANNELS, int N_NODES, typename dtype>
+ bool SingleQueryBundleOptimizer::RunQuery(
+-    Eigen::Ref<Eigen::Vector4d>& qvec, Eigen::Ref<Eigen::Vector3d>& tvec,
++    colmap::Rigid3d& cam_from_world,
+     colmap::Camera& camera, std::vector<Eigen::Vector3d>& points3D,
+     FeatureMap<dtype>& fmap,
+     std::vector<std::vector<DescriptorMatrixXd>>& references,
+@@ -157,21 +154,21 @@ bool SingleQueryBundleOptimizer::RunQuery(
+ 
+     for (auto& descr : references[idx]) {
+       QueryBO::AddFeatureReferenceResidual<CHANNELS, N_NODES>(
+-          &problem, camera.ModelId(), camera.ParamsData(), qvec.data(),
+-          tvec.data(), points3D[idx].data(), descr.data(), NULL,
++          &problem, camera.model_id, camera.params.data(), cam_from_world.params.data(),
++          (cam_from_world.params.data() + 4), points3D[idx].data(), descr.data(), NULL,
+           fmap.GetFeaturePatch(patch_idx), loss_function);
+     }
+     problem.SetParameterBlockConstant(points3D[idx].data());
+   }
+ 
+-  QueryBO::ParameterizeQuery(&problem, camera, qvec.data(), tvec.data());
++  QueryBO::ParameterizeQuery(&problem, camera, cam_from_world.params.data(), (cam_from_world.params.data() + 4));
+ 
+   return QueryBO::SolveProblem(&problem);
+ }
+ 
+ template <int CHANNELS, int N_NODES, typename dtype>
+ bool SingleQueryBundleOptimizer::RunQuery(
+-    Eigen::Ref<Eigen::Vector4d>& qvec, Eigen::Ref<Eigen::Vector3d>& tvec,
++    colmap::Rigid3d& cam_from_world,
+     colmap::Camera& camera, std::vector<Eigen::Vector3d>& points3D,
+     FeatureMap<dtype>& fmap, std::vector<Reference>& references,
+     std::vector<colmap::point2D_t>* patch_idxs, std::vector<bool>* inliers) {
+@@ -197,15 +194,15 @@ bool SingleQueryBundleOptimizer::RunQuery(
+ 
+     if (!references[idx].HasObservations()) {
+       QueryBO::AddFeatureReferenceResidual<CHANNELS, N_NODES>(
+-          &problem, camera.ModelId(), camera.ParamsData(), qvec.data(),
+-          tvec.data(), points3D[idx].data(), references[idx].DescriptorData(),
++          &problem, camera.model_id, camera.params.data(), cam_from_world.params.data(),
++          (cam_from_world.params.data() + 4), points3D[idx].data(), references[idx].DescriptorData(),
+           references[idx].NodeOffsets3DData(), fmap.GetFeaturePatch(patch_idx),
+           loss_function);
+     } else {
+       for (auto& descr : references[idx].observations) {
+         QueryBO::AddFeatureReferenceResidual<CHANNELS, N_NODES>(
+-            &problem, camera.ModelId(), camera.ParamsData(), qvec.data(),
+-            tvec.data(), points3D[idx].data(), descr.data(), NULL,
++            &problem, camera.model_id, camera.params.data(), cam_from_world.params.data(),
++            (cam_from_world.params.data() + 4), points3D[idx].data(), descr.data(), NULL,
+             fmap.GetFeaturePatch(patch_idx), loss_function);
+       }
+     }
+@@ -213,7 +210,7 @@ bool SingleQueryBundleOptimizer::RunQuery(
+     problem.SetParameterBlockConstant(points3D[idx].data());
+   }
+ 
+-  QueryBO::ParameterizeQuery(&problem, camera, qvec.data(), tvec.data());
++  QueryBO::ParameterizeQuery(&problem, camera, cam_from_world.params.data(), (cam_from_world.params.data() + 4));
+ 
+   return QueryBO::SolveProblem(&problem);
+ }
+diff --git a/pixsfm/localization/src/single_query_keypoint_optimizer.h b/pixsfm/localization/src/single_query_keypoint_optimizer.h
+index a7f5e94..05237f7 100644
+--- a/pixsfm/localization/src/single_query_keypoint_optimizer.h
++++ b/pixsfm/localization/src/single_query_keypoint_optimizer.h
+@@ -3,8 +3,8 @@
+ #pragma once
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/reconstruction.h>
+-#include <colmap/optim/bundle_adjustment.h>
++#include <colmap/scene/reconstruction.h>
++#include <colmap/estimators/bundle_adjustment.h>
+ #include <colmap/util/types.h>
+ 
+ #include "base/src/interpolation.h"
+@@ -66,7 +66,7 @@ bool SingleQueryKeypointOptimizer::RunQuery(
+     RefType& references, std::vector<colmap::point2D_t>* patch_idxs,
+     std::vector<bool>* inliers) {
+   if (patch_idxs) {
+-    THROW_CHECK_EQ(patch_idxs->size(), keypoints.rows())
++    THROW_CHECK_EQ(patch_idxs->size(), keypoints.rows());
+   }
+   size_t channels = fmap.Channels();
+   size_t n_nodes = interpolation_config_.nodes.size();
+diff --git a/pixsfm/localize.py b/pixsfm/localize.py
+index 427a573..0091a5a 100644
+--- a/pixsfm/localize.py
++++ b/pixsfm/localize.py
+@@ -74,13 +74,13 @@ def main(
+                 ret, log = pose_from_cluster(
+                         localizer, qname, qcam, cluster_ids, features, matches,
+                         image_path=image_dir / qname)
+-                if ret['success'] and ret['num_inliers'] > best_inliers:
++                if ret is not None and ret['num_inliers'] > best_inliers:
+                     best_cluster = i
+                     best_inliers = ret['num_inliers']
+                 logs_clusters.append(log)
+             if best_cluster is not None:
+                 ret = logs_clusters[best_cluster]['PnP_ret']
+-                poses[qname] = (ret['qvec'], ret['tvec'])
++                poses[qname] = ret['cam_from_world']
+             logs['loc'][qname] = {
+                 'db': db_ids,
+                 'best_cluster': best_cluster,
+@@ -91,11 +91,11 @@ def main(
+             ret, log = pose_from_cluster(
+                     localizer, qname, qcam, db_ids, features, matches,
+                     image_path=image_dir / qname)
+-            if ret['success']:
+-                poses[qname] = (ret['qvec'], ret['tvec'])
++            if ret is not None:
++                poses[qname] = ret['cam_from_world']
+             else:
+                 closest = reference_sfm.images[db_ids[0]]
+-                poses[qname] = (closest.qvec, closest.tvec)
++                poses[qname] = closest.cam_from_world()
+             log['covisibility_clustering'] = covisibility_clustering
+             logs['loc'][qname] = log
+ 
+@@ -103,9 +103,9 @@ def main(
+     logger.info(f'Writing poses to {results}...')
+     with open(results, 'w') as f:
+         for q in poses:
+-            qvec, tvec = poses[q]
+-            qvec = ' '.join(map(str, qvec))
+-            tvec = ' '.join(map(str, tvec))
++            # COLMAP convention: qw qx qy qz tx ty tz
++            qvec = ' '.join(map(str, poses[q].rotation.quat[[3, 0, 1, 2]]))
++            tvec = ' '.join(map(str, poses[q].translation))
+             name = q.split('/')[-1]
+             if prepend_camera_name:
+                 name = q.split('/')[-2] + '/' + name
+diff --git a/pixsfm/residuals/src/feature_reference.h b/pixsfm/residuals/src/feature_reference.h
+index 4ddc7d0..ca60577 100644
+--- a/pixsfm/residuals/src/feature_reference.h
++++ b/pixsfm/residuals/src/feature_reference.h
+@@ -1,8 +1,8 @@
+ #pragma once
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/projection.h>
+-#include <colmap/base/reconstruction.h>
++#include <colmap/geometry/rigid3.h>
++#include <colmap/scene/reconstruction.h>
+ #include <colmap/util/types.h>
+ 
+ #include "features/src/featurepatch.h"
+@@ -90,7 +90,7 @@ struct FeatureReferenceCostFunctor {
+                                      const double* node_offsets3D = NULL) {
+     return (new ceres::AutoDiffCostFunction<FeatureReferenceCostFunctor,
+                                             N_RESIDUALS, 4, 3, 3,
+-                                            CameraModel::kNumParams>(
++                                            CameraModel::num_params>(
+         new FeatureReferenceCostFunctor(patch, interpolation_config,
+                                         reference_descriptor, node_offsets3D)));
+   }
+@@ -169,9 +169,13 @@ struct FeatureReferenceConstantPoseCostFunctor
+       InterpolationConfig& interpolation_config, const double* qvec,
+       const double* tvec, const double* ref_descriptor = NULL,
+       const double* node_offsets3D = NULL)
+-      : Parent(patch, interpolation_config, ref_descriptor, node_offsets3D),
+-        qvec_(qvec),
+-        tvec_(tvec) {}
++      : Parent(patch, interpolation_config, ref_descriptor, node_offsets3D) {
++    CHECK_NOTNULL(qvec);
++    CHECK_NOTNULL(tvec);
++    // Copy the (constant) pose, so callers do not need to keep it alive.
++    std::copy(qvec, qvec + 4, qvec_);
++    std::copy(tvec, tvec + 3, tvec_);
++  }
+ 
+   static ceres::CostFunction* Create(const FeaturePatch<dtype>& patch,
+                                      InterpolationConfig& interpolation_config,
+@@ -181,7 +185,7 @@ struct FeatureReferenceConstantPoseCostFunctor
+     return (
+         new ceres::AutoDiffCostFunction<FeatureReferenceConstantPoseCostFunctor,
+                                         N_RESIDUALS, 3,
+-                                        CameraModel::kNumParams>(
++                                        CameraModel::num_params>(
+             new FeatureReferenceConstantPoseCostFunctor(
+                 patch, interpolation_config, qvec, tvec, reference_descriptor,
+                 node_offsets3D)));
+@@ -191,9 +195,6 @@ struct FeatureReferenceConstantPoseCostFunctor
+   bool operator()(const T* const point3D, const T* const camera_params,
+                   T* residuals) const {
+     // TYPE cast
+-    CHECK_NOTNULL(qvec_);
+-    CHECK_NOTNULL(tvec_);
+-
+     T tvec[3] = {T(tvec_[0]), T(tvec_[1]), T(tvec_[2])};
+     T qvec[4] = {T(qvec_[0]), T(qvec_[1]), T(qvec_[2]), T(qvec_[3])};
+     return Parent::operator()(qvec, tvec, point3D, camera_params, residuals);
+@@ -202,8 +203,8 @@ struct FeatureReferenceConstantPoseCostFunctor
+  protected:
+   static constexpr int N_RESIDUALS =
+       N_NODES * (OUT_CHANNELS > 0 ? OUT_CHANNELS : CHANNELS);
+-  const double* qvec_;
+-  const double* tvec_;
++  double qvec_[4];
++  double tvec_[3];
+ };
+ 
+ template <typename CameraModel, typename dtype, int CHANNELS,
+@@ -218,36 +219,37 @@ Initialization Wrappers: (resolving camera model templates)
+ 
+ template <int CHANNELS, int N_NODES, int OUT_CHANNELS, typename dtype>
+ ceres::CostFunction* CreateFeatureReferenceCostFunctor(
+-    int camera_model_id, const FeaturePatch<dtype>& patch,
++    colmap::CameraModelId camera_model_id, const FeaturePatch<dtype>& patch,
+     const double* reference_descriptor, const double* node_offsets3D,
+     InterpolationConfig& interpolation_config) {
+   switch (camera_model_id) {
+ #define CAMERA_MODEL_CASE(CameraModel)                               \
+-  case colmap::CameraModel::kModelId:                                \
++  case colmap::CameraModel::model_id:                                \
+     return FeatureReferenceCostFunctor<                              \
+         colmap::CameraModel, dtype, CHANNELS, N_NODES,               \
+         OUT_CHANNELS>::Create(patch, interpolation_config,           \
+                               reference_descriptor, node_offsets3D); \
+     break;
+-    CAMERA_MODEL_SWITCH_CASES
++    PIXSFM_CAMERA_MODEL_SWITCH_CASES
+ #undef CAMERA_MODEL_CASE
+   }
+ }
+ 
+ template <int CHANNELS, int N_NODES, int OUT_CHANNELS, typename dtype>
+ ceres::CostFunction* CreateFeatureReferenceConstantPoseCostFunctor(
+-    int camera_model_id, double* qvec, double* tvec,
+-    const FeaturePatch<dtype>& patch, const double* reference_descriptor,
++    colmap::CameraModelId camera_model_id, const double* qvec,
++    const double* tvec, const FeaturePatch<dtype>& patch,
++    const double* reference_descriptor,
+     const double* node_offsets3D, InterpolationConfig& interpolation_config) {
+   switch (camera_model_id) {
+ #define CAMERA_MODEL_CASE(CameraModel)                                 \
+-  case colmap::CameraModel::kModelId:                                  \
++  case colmap::CameraModel::model_id:                                  \
+     return FeatureReferenceConstantPoseCostFunctor<                    \
+         colmap::CameraModel, dtype, CHANNELS, N_NODES,                 \
+         OUT_CHANNELS>::Create(patch, interpolation_config, qvec, tvec, \
+                               reference_descriptor, node_offsets3D);   \
+     break;
+-    CAMERA_MODEL_SWITCH_CASES
++    PIXSFM_CAMERA_MODEL_SWITCH_CASES
+ #undef CAMERA_MODEL_CASE
+   }
+ }
+@@ -255,7 +257,7 @@ ceres::CostFunction* CreateFeatureReferenceConstantPoseCostFunctor(
+ // PyBind interfaces
+ template <typename dtype>
+ ceres::CostFunction* CreateFeatureReferenceCostFunctor(
+-    int camera_model_id, const FeaturePatch<dtype>& patch,
++    colmap::CameraModelId camera_model_id, const FeaturePatch<dtype>& patch,
+     Eigen::Ref<DescriptorMatrixXd> reference_descriptor,
+     InterpolationConfig& interpolation_config) {
+   int channels = patch.Channels();
+@@ -287,8 +289,8 @@ ceres::CostFunction* CreateFeatureReferenceCostFunctor(
+ 
+ template <typename dtype>
+ ceres::CostFunction* CreateFeatureReferenceConstantPoseCostFunctor(
+-    int camera_model_id, Eigen::Ref<Eigen::Vector4d> qvec,
+-    Eigen::Ref<Eigen::Vector3d> tvec, const FeaturePatch<dtype>& patch,
++    colmap::CameraModelId camera_model_id,
++    const colmap::Rigid3d& cam_from_world, const FeaturePatch<dtype>& patch,
+     Eigen::Ref<DescriptorMatrixXd> reference_descriptor,
+     InterpolationConfig& interpolation_config) {
+   int channels = patch.Channels();
+@@ -301,7 +303,8 @@ ceres::CostFunction* CreateFeatureReferenceConstantPoseCostFunctor(
+   if (channels == CHANNELS && n_nodes == N_NODES) {                         \
+     return CreateFeatureReferenceConstantPoseCostFunctor<CHANNELS, N_NODES, \
+                                                          -1>(               \
+-        camera_model_id, qvec.data(), tvec.data(), patch,                   \
++        camera_model_id, cam_from_world.params.data(),                      \
++        cam_from_world.params.data() + 4, patch,                            \
+         reference_descriptor.data(), nullptr, interpolation_config);        \
+   }
+ 
+diff --git a/pixsfm/residuals/src/featuremetric.h b/pixsfm/residuals/src/featuremetric.h
+index 95c6199..3dbc6b4 100644
+--- a/pixsfm/residuals/src/featuremetric.h
++++ b/pixsfm/residuals/src/featuremetric.h
+@@ -2,8 +2,8 @@
+ #pragma once
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/projection.h>
+-#include <colmap/base/reconstruction.h>
++#include <colmap/scene/projection.h>
++#include <colmap/scene/reconstruction.h>
+ #include <colmap/util/types.h>
+ 
+ #include "features/src/featurepatch.h"
+@@ -100,7 +100,7 @@ struct FeatureMetricCostFunctor {
+       InterpolationConfig& interpolation_config) {
+     return (new ceres::AutoDiffCostFunction<
+             FeatureMetricCostFunctor, N_NODES * CHANNELS, 4, 3, 4, 3, 3,
+-            CameraModel::kNumParams, SourceCameraModel::kNumParams>(
++            CameraModel::num_params, SourceCameraModel::num_params>(
+         new FeatureMetricCostFunctor(patch, &src_patch, interpolation_config)));
+   }
+ 
+@@ -109,7 +109,7 @@ struct FeatureMetricCostFunctor {
+                                      const double* reference_descriptor) {
+     return (new ceres::AutoDiffCostFunction<
+             FeatureMetricCostFunctor, N_NODES * CHANNELS, 4, 3, 4, 3, 3,
+-            CameraModel::kNumParams, SourceCameraModel::kNumParams>(
++            CameraModel::num_params, SourceCameraModel::num_params>(
+         new FeatureMetricCostFunctor(target_patch, NULL, interpolation_config,
+                                      reference_descriptor)));
+   }
+@@ -213,7 +213,7 @@ struct FeatureMetricSharedIntrinsicsCostFunctor
+       InterpolationConfig& interpolation_config) {
+     return (new ceres::AutoDiffCostFunction<
+             FeatureMetricSharedIntrinsicsCostFunctor, N_NODES * CHANNELS, 4, 3,
+-            4, 3, 3, CameraModel::kNumParams>(
++            4, 3, 3, CameraModel::num_params>(
+         new FeatureMetricSharedIntrinsicsCostFunctor(patch, &src_patch,
+                                                      interpolation_config)));
+   }
+@@ -223,7 +223,7 @@ struct FeatureMetricSharedIntrinsicsCostFunctor
+                                      const double* reference_descriptor) {
+     return (new ceres::AutoDiffCostFunction<
+             FeatureMetricSharedIntrinsicsCostFunctor, N_NODES * CHANNELS, 4, 3,
+-            4, 3, 3, CameraModel::kNumParams>(
++            4, 3, 3, CameraModel::num_params>(
+         new FeatureMetricSharedIntrinsicsCostFunctor(
+             target_patch, NULL, interpolation_config, reference_descriptor)));
+   }
+@@ -259,16 +259,16 @@ Initialization Wrappers: (resolving camera model templates)
+ 
+ template <int CHANNELS, int N_NODES, typename dtype>
+ ceres::CostFunction* CreateFeatureMetricCostFunctor(
+-    int camera_model_id,               // Src
++    colmap::CameraModelId camera_model_id,               // Src
+     const FeaturePatch<dtype>& patch,  // Src
+-    int src_camera_model_id, const FeaturePatch<dtype>& src_patch,
++    colmap::CameraModelId src_camera_model_id, const FeaturePatch<dtype>& src_patch,
+     InterpolationConfig& interpolation_config) {
+   // Temporary
+   THROW_CHECK_EQ(camera_model_id, src_camera_model_id);
+ 
+   switch (camera_model_id) {
+ #define CAMERA_MODEL_CASE(CameraModel)                            \
+-  case colmap::CameraModel::kModelId:                             \
++  case colmap::CameraModel::model_id:                             \
+     return FeatureMetricSameModelCostFunctor<                     \
+         colmap::CameraModel, dtype, CHANNELS,                     \
+         N_NODES>::Create(patch, src_patch, interpolation_config); \
+@@ -282,7 +282,7 @@ ceres::CostFunction* CreateFeatureMetricCostFunctor(
+ 
+ template <int CHANNELS, int N_NODES, typename dtype>
+ ceres::CostFunction* CreateFeatureMetricRegularizerCostFunctor(
+-    int camera_model_id, int src_camera_model_id,
++    colmap::CameraModelId camera_model_id, colmap::CameraModelId src_camera_model_id,
+     const FeaturePatch<dtype>& patch, const double* reference_descriptor,
+     InterpolationConfig& interpolation_config) {
+   // Temporary
+@@ -290,7 +290,7 @@ ceres::CostFunction* CreateFeatureMetricRegularizerCostFunctor(
+ 
+   switch (camera_model_id) {
+ #define CAMERA_MODEL_CASE(CameraModel)                                       \
+-  case colmap::CameraModel::kModelId:                                        \
++  case colmap::CameraModel::model_id:                                        \
+     return FeatureMetricSameModelCostFunctor<                                \
+         colmap::CameraModel, dtype, CHANNELS,                                \
+         N_NODES>::Create(patch, interpolation_config, reference_descriptor); \
+@@ -304,12 +304,12 @@ ceres::CostFunction* CreateFeatureMetricRegularizerCostFunctor(
+ 
+ template <int CHANNELS, int N_NODES, typename dtype>
+ ceres::CostFunction* CreateFeatureMetricSharedIntrinsicsCostFunctor(
+-    int camera_model_id, const FeaturePatch<dtype>& patch,
++    colmap::CameraModelId camera_model_id, const FeaturePatch<dtype>& patch,
+     const FeaturePatch<dtype>& src_patch,
+     InterpolationConfig& interpolation_config) {
+   switch (camera_model_id) {
+ #define CAMERA_MODEL_CASE(CameraModel)                            \
+-  case colmap::CameraModel::kModelId:                             \
++  case colmap::CameraModel::model_id:                             \
+     return FeatureMetricSharedIntrinsicsCostFunctor<              \
+         colmap::CameraModel, dtype, CHANNELS,                     \
+         N_NODES>::Create(patch, src_patch, interpolation_config); \
+@@ -321,12 +321,12 @@ ceres::CostFunction* CreateFeatureMetricSharedIntrinsicsCostFunctor(
+ 
+ template <int CHANNELS, int N_NODES, typename dtype>
+ ceres::CostFunction* CreateFeatureMetricSharedIntrinsicsRegularizerCostFunctor(
+-    int camera_model_id, const FeaturePatch<dtype>& patch,
++    colmap::CameraModelId camera_model_id, const FeaturePatch<dtype>& patch,
+     const double* reference_descriptor,
+     InterpolationConfig& interpolation_config) {
+   switch (camera_model_id) {
+ #define CAMERA_MODEL_CASE(CameraModel)                                       \
+-  case colmap::CameraModel::kModelId:                                        \
++  case colmap::CameraModel::model_id:                                        \
+     return FeatureMetricSharedIntrinsicsCostFunctor<                         \
+         dtype, colmap::CameraModel, CHANNELS,                                \
+         N_NODES>::Create(patch, interpolation_config, reference_descriptor); \
+@@ -349,13 +349,13 @@ ceres::CostFunction* CreateFeatureMetricCostFunctor(
+ 
+ #define REGISTER_METHOD(CHANNELS, N_NODES)                            \
+   if (channels == CHANNELS && n_nodes == N_NODES) {                   \
+-    if (camera.Params() == src_camera.Params()) {                     \
++    if (camera.params == src_camera.params) {                     \
+       return CreateFeatureMetricSharedIntrinsicsCostFunctor<CHANNELS, \
+                                                             N_NODES>( \
+-          camera.ModelId(), patch, src_patch, interpolation_config);  \
++          camera.model_id, patch, src_patch, interpolation_config);  \
+     } else {                                                          \
+       return CreateFeatureMetricCostFunctor<CHANNELS, N_NODES>(       \
+-          camera.ModelId(), patch, src_camera.ModelId(), src_patch,   \
++          camera.model_id, patch, src_camera.model_id, src_patch,   \
+           interpolation_config);                                      \
+     }                                                                 \
+   }
+diff --git a/pixsfm/residuals/src/geometric.h b/pixsfm/residuals/src/geometric.h
+index de4f7ff..b350158 100644
+--- a/pixsfm/residuals/src/geometric.h
++++ b/pixsfm/residuals/src/geometric.h
+@@ -1,43 +1,107 @@
+ #pragma once
+ 
+ #include <ceres/ceres.h>
+-#include <colmap/base/cost_functions.h>
+-#include <colmap/base/projection.h>
++#include <colmap/geometry/rigid3.h>
++#include <colmap/sensor/models.h>
+ #include <colmap/util/types.h>
+ 
+ #include "base/src/projection.h"
+ 
+ namespace pixsfm {
+ 
++/*******************************************************************************
++Reprojection Error Cost Functors:
++*******************************************************************************/
++
++// Standard bundle adjustment cost function for variable camera pose
++// (qvec in Eigen order, tvec), point and calibration parameters.
++template <typename CameraModel>
++struct GeometricCostFunctor {
++  explicit GeometricCostFunctor(const Eigen::Vector2d& point2D)
++      : point2D_(point2D) {}
++
++  static ceres::CostFunction* Create(const Eigen::Vector2d& point2D) {
++    return (new ceres::AutoDiffCostFunction<GeometricCostFunctor, 2, 4, 3, 3,
++                                            CameraModel::num_params>(
++        new GeometricCostFunctor(point2D)));
++  }
++
++  template <typename T>
++  bool operator()(const T* const qvec, const T* const tvec,
++                  const T* const point3D, const T* const camera_params,
++                  T* residuals) const {
++    WorldToPixel<CameraModel>(camera_params, qvec, tvec, point3D, residuals);
++    residuals[0] -= T(point2D_(0));
++    residuals[1] -= T(point2D_(1));
++    return true;
++  }
++
++ private:
++  const Eigen::Vector2d point2D_;
++};
++
++// Bundle adjustment cost function for variable point and calibration
++// parameters, and fixed camera pose.
++template <typename CameraModel>
++struct GeometricConstantPoseCostFunctor {
++  GeometricConstantPoseCostFunctor(const colmap::Rigid3d& cam_from_world,
++                                   const Eigen::Vector2d& point2D)
++      : cam_from_world_(cam_from_world), point2D_(point2D) {}
++
++  static ceres::CostFunction* Create(const colmap::Rigid3d& cam_from_world,
++                                     const Eigen::Vector2d& point2D) {
++    return (new ceres::AutoDiffCostFunction<GeometricConstantPoseCostFunctor,
++                                            2, 3, CameraModel::num_params>(
++        new GeometricConstantPoseCostFunctor(cam_from_world, point2D)));
++  }
++
++  template <typename T>
++  bool operator()(const T* const point3D, const T* const camera_params,
++                  T* residuals) const {
++    const Eigen::Matrix<T, 7, 1> cam_from_world =
++        cam_from_world_.params.cast<T>();
++    WorldToPixel<CameraModel>(camera_params, cam_from_world.data(),
++                              cam_from_world.data() + 4, point3D, residuals);
++    residuals[0] -= T(point2D_(0));
++    residuals[1] -= T(point2D_(1));
++    return true;
++  }
++
++ private:
++  const colmap::Rigid3d cam_from_world_;
++  const Eigen::Vector2d point2D_;
++};
++
+ /*******************************************************************************
+ Initialization Wrappers: (resolving camera model templates)
+ *******************************************************************************/
+ 
+-ceres::CostFunction* CreateGeometricCostFunctor(
+-    int camera_model_id, const Eigen::Vector2d& point2D) {
++inline ceres::CostFunction* CreateGeometricCostFunctor(
++    colmap::CameraModelId camera_model_id, const Eigen::Vector2d& point2D) {
+   switch (camera_model_id) {
+-#define CAMERA_MODEL_CASE(CameraModel)                                        \
+-  case colmap::CameraModel::kModelId:                                         \
+-    return colmap::BundleAdjustmentCostFunction<colmap::CameraModel>::Create( \
+-        point2D);                                                             \
++#define CAMERA_MODEL_CASE(CameraModel)                                    \
++  case colmap::CameraModel::model_id:                                     \
++    return GeometricCostFunctor<colmap::CameraModel>::Create(point2D);    \
+     break;
+-    CAMERA_MODEL_SWITCH_CASES
++    PIXSFM_CAMERA_MODEL_SWITCH_CASES
+ #undef CAMERA_MODEL_CASE
+   }
++  return nullptr;
+ }
+ 
+-ceres::CostFunction* CreateGeometricConstantPoseCostFunctor(
+-    int camera_model_id, const Eigen::Vector4d& qvec,
+-    const Eigen::Vector3d& tvec, const Eigen::Vector2d& point2D) {
++inline ceres::CostFunction* CreateGeometricConstantPoseCostFunctor(
++    colmap::CameraModelId camera_model_id,
++    const colmap::Rigid3d& cam_from_world, const Eigen::Vector2d& point2D) {
+   switch (camera_model_id) {
+-#define CAMERA_MODEL_CASE(CameraModel)                       \
+-  case colmap::CameraModel::kModelId:                        \
+-    return colmap::BundleAdjustmentConstantPoseCostFunction< \
+-        colmap::CameraModel>::Create(qvec, tvec, point2D);   \
++#define CAMERA_MODEL_CASE(CameraModel)                                     \
++  case colmap::CameraModel::model_id:                                      \
++    return GeometricConstantPoseCostFunctor<colmap::CameraModel>::Create(  \
++        cam_from_world, point2D);                                          \
+     break;
+-    CAMERA_MODEL_SWITCH_CASES
++    PIXSFM_CAMERA_MODEL_SWITCH_CASES
+ #undef CAMERA_MODEL_CASE
+   }
++  return nullptr;
+ }
+ 
+-}  // namespace pixsfm
+\ No newline at end of file
++}  // namespace pixsfm
+diff --git a/pixsfm/util/colmap.py b/pixsfm/util/colmap.py
+index 1ffed9a..0fc79a6 100644
+--- a/pixsfm/util/colmap.py
++++ b/pixsfm/util/colmap.py
+@@ -21,7 +21,8 @@ def read_keypoints_from_db(database_path: Path, as_cpp_map: bool = True,
+         keypoints_dict = {}
+     db = COLMAPDatabase.connect(str(database_path))
+     id2name = db.image_id_to_name()
+-    for image_id, rows, cols, data in db.execute("SELECT * FROM keypoints"):
++    for image_id, rows, cols, data in db.execute(
++            "SELECT image_id, rows, cols, data FROM keypoints"):
+         keypoints = blob_to_array(data, np.float32, (rows, cols))
+         keypoints = keypoints.astype(np.float64)[:, :2]  # keep only xy
+         keypoints_dict[id2name[image_id]] = keypoints
+@@ -34,7 +35,8 @@ def read_matches_from_db(database_path: Path
+     db = COLMAPDatabase.connect(database_path)
+     id2name = db.image_id_to_name()
+     desc = {}
+-    for image_id, r, c, data in db.execute("SELECT * FROM descriptors"):
++    for image_id, r, c, data in db.execute(
++            "SELECT image_id, rows, cols, data FROM descriptors"):
+         d = blob_to_array(data, np.uint8, (-1, c))
+         desc[image_id] = d / np.linalg.norm(d, axis=1, keepdims=True)
+     # only compute scores if descriptors are in database
+diff --git a/pixsfm/util/database.py b/pixsfm/util/database.py
+index 6f67bfb..40b0dcc 100644
+--- a/pixsfm/util/database.py
++++ b/pixsfm/util/database.py
+@@ -124,14 +124,14 @@ def pair_id_to_image_ids(pair_id):
+ 
+ def array_to_blob(array):
+     if IS_PYTHON3:
+-        return array.tostring()
++        return array.tobytes()
+     else:
+         return np.getbuffer(array)
+ 
+ 
+ def blob_to_array(blob, dtype, shape=(-1,)):
+     if IS_PYTHON3:
+-        return np.fromstring(blob, dtype=dtype).reshape(*shape)
++        return np.frombuffer(blob, dtype=dtype).reshape(*shape).copy()
+     else:
+         return np.frombuffer(blob, dtype=dtype).reshape(*shape)
+ 
+@@ -183,7 +183,8 @@ class COLMAPDatabase(sqlite3.Connection):
+ 
+         keypoints = np.asarray(keypoints, np.float32)
+         self.execute(
+-            "INSERT INTO keypoints VALUES (?, ?, ?, ?)",
++            "INSERT INTO keypoints (image_id, rows, cols, data) "
++            "VALUES (?, ?, ?, ?)",
+             (image_id,) + keypoints.shape + (array_to_blob(keypoints),))
+ 
+     def add_descriptors(self, image_id, descriptors):
+diff --git a/pixsfm/util/src/log_exceptions.h b/pixsfm/util/src/log_exceptions.h
+index de54b69..8747087 100644
+--- a/pixsfm/util/src/log_exceptions.h
++++ b/pixsfm/util/src/log_exceptions.h
+@@ -3,6 +3,7 @@
+ #include <sstream>
+ #include <string>
+ 
++#include <colmap/util/logging.h>
+ #include <colmap/util/misc.h>
+ 
+ #include <pybind11/pybind11.h>
+@@ -99,22 +100,12 @@ void __ThrowCheckOpImpl(const char* file, const int line, const bool result,
+     throw TemplateException<exception>(__FILE__, __LINE__, \
+                                        __GetCheckString(#condition));
+ 
+-#define THROW_CHECK(expr) __ThrowCheckImpl(__FILE__, __LINE__, (expr), #expr);
++// THROW_CHECK and THROW_CHECK_{EQ,NE,LE,LT,GE,GT} are provided by
++// colmap/util/logging.h (and throw std::invalid_argument).
+ 
+ #define THROW_CHECK_MSG(expr, msg) \
+   __ThrowCheckImplMsg(__FILE__, __LINE__, (expr), #expr, ToString(msg))
+ 
+-#define THROW_CHECK_OP(name, op, val1, val2)                                \
+-  __ThrowCheckOpImpl(__FILE__, __LINE__, (val1 op val2), val1, val2, #val1, \
+-                     #val2, #op);
+-
+-#define THROW_CHECK_EQ(val1, val2) THROW_CHECK_OP(_EQ, ==, val1, val2)
+-#define THROW_CHECK_NE(val1, val2) THROW_CHECK_OP(_NE, !=, val1, val2)
+-#define THROW_CHECK_LE(val1, val2) THROW_CHECK_OP(_LE, <=, val1, val2)
+-#define THROW_CHECK_LT(val1, val2) THROW_CHECK_OP(_LT, <, val1, val2)
+-#define THROW_CHECK_GE(val1, val2) THROW_CHECK_OP(_GE, >=, val1, val2)
+-#define THROW_CHECK_GT(val1, val2) THROW_CHECK_OP(_GT, >, val1, val2)
+-
+ #define THROW_CHECK_FILE_EXISTS(path) \
+   THROW_CHECK_MSG(ExistsFile(path),   \
+                   std::string("File ") + path + " does not exist.");
+diff --git a/pixsfm/util/src/math.h b/pixsfm/util/src/math.h
+index 5014f34..a1e310a 100644
+--- a/pixsfm/util/src/math.h
++++ b/pixsfm/util/src/math.h
+@@ -1,6 +1,6 @@
+ #pragma once
+ 
+-#include <colmap/util/math.h>
++#include <colmap/math/math.h>
+ template <typename T>
+ inline bool IsInsideZeroL(const T& value, double L) {
+   return (value > 0.0 && value < L);
+diff --git a/pixsfm/util/src/simple_logger.h b/pixsfm/util/src/simple_logger.h
+index 34da3ae..1f1f470 100644
+--- a/pixsfm/util/src/simple_logger.h
++++ b/pixsfm/util/src/simple_logger.h
+@@ -8,14 +8,24 @@
+ // Adapted by Philipp Lindenberger (Phil26AT)
+ 
+ #pragma once
++#include <algorithm>
+ #include <ctime>
+ #include <iostream>
+ #include <mutex>
++#include <string>
+ #include <third-party/progressbar.h>
+ //
+ 
+ namespace pixsfm {
+ 
++// Replacement for colmap::PrintHeading2, which was removed in COLMAP 3.9.
++inline void PrintHeading2(const std::string& heading) {
++  std::cout << std::endl
++            << heading << std::endl
++            << std::string(std::min<int>(heading.size(), 78), '-')
++            << std::endl;
++}
++
+ // https://stackoverflow.com/questions/16357999/current-date-and-time-as-string
+ inline std::string GetCurrentDateTimeString() {
+   time_t rawtime;

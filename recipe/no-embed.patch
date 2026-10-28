@@ -1,0 +1,28 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5e3d921..74ed1fa 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -115,8 +115,7 @@ set(PIXSFM_EXTERNAL_LIBRARIES
+ 
+ set(PIXSFM_INTERNAL_LIBRARIES
+   HighFive
+-  pybind11::module
+-  pybind11::embed
++  pybind11::pybind11
+ )
+ 
+ include_directories(
+diff --git a/cmake/CMakeConfig.cmake.in b/cmake/CMakeConfig.cmake.in
+index b5d909a..2c943c6 100644
+--- a/cmake/CMakeConfig.cmake.in
++++ b/cmake/CMakeConfig.cmake.in
+@@ -95,8 +95,7 @@ set(PIXSFM_LINK_DIRS
+ 
+ set(PIXSFM_INTERNAL_LIBRARIES
+     HighFive
+-    pybind11::module
+-    pybind11::embed
++    pybind11::pybind11
+ )
+ 
+ set(PIXSFM_EXTERNAL_LIBRARIES
