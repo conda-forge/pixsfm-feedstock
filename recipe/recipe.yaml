@@ -9,7 +9,7 @@ context:
   build: ${{ build_number + 100 if cuda_compiler_version != "None" else build_number }}
 
 package:
-  name: ${{ name|lower }}
+  name: pixsfm
   version: ${{ version }}
 
 source:
@@ -127,6 +127,15 @@ tests:
         - test_geometric_ba.py
     script:
       - python test_geometric_ba.py
+  # compares keypoint/bundle adjustment and query refinement against pixsfm 1.0
+  - files:
+      source:
+        - datasets/sacre_coeur/mapping/
+      recipe:
+        - test_regression.py
+        - regression_data.tar.xz
+    script:
+      - python test_regression.py
 
 about:
   homepage: https://github.com/cvg/pixel-perfect-sfm
