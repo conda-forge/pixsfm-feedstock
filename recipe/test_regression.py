@@ -6,9 +6,17 @@ exhaustive matching, incremental mapping; descriptors dropped). The reference
 numbers below were produced by pixsfm 1.0.0 (conda-forge build 28, osx-arm64)
 on these inputs, with the same configuration as this test.
 
-Keypoint adjustment and query refinement reproduce pixsfm 1.0 exactly. Bundle
-adjustment converges to an equivalent solution: the pose parametrization
-changed from Ceres' quaternion manifold to Eigen's (as in COLMAP 4).
+On the same platform, keypoint adjustment and query refinement reproduce
+pixsfm 1.0 exactly. Bundle adjustment converges to an equivalent solution: the
+pose parametrization changed from Ceres' quaternion manifold to Eigen's (as in
+COLMAP 4).
+
+The dense features differ slightly between platforms (pixsfm 1.0 on
+linux-aarch64 gives a BA initial cost of 60.189359 instead of 60.188280), so
+the tolerances cover the spread of the unmodified pixsfm 1.0 across platforms.
+The BA point update is weakly constrained: for pixsfm 1.0 its mean ranges from
+0.066 (linux-aarch64) to 0.070 (osx-arm64), and the x86 (AVX2/FMA) builds land
+higher still, so it is only checked loosely.
 """
 import math
 import shutil
@@ -96,11 +104,11 @@ rec, ba_data, _ = sfm.run_ba(rec, images)
 summary = ba_data["summary"][0]
 update = np.mean([np.linalg.norm(rec.points3D[i].xyz - xyz0[i]) for i in xyz0])
 ref = REFERENCE["ba"]
-check("ba.initial_cost", summary.initial_cost, ref["initial_cost"], rtol=1e-5)
+check("ba.initial_cost", summary.initial_cost, ref["initial_cost"], rtol=1e-4)
 # Different (equivalent) pose manifold: same optimum up to solver tolerance.
 check("ba.final_cost", summary.final_cost, ref["final_cost"], rtol=2e-3)
 check("ba.mean_point_update", float(update), ref["mean_point_update"],
-      rtol=0.05)
+      rtol=0.25)
 
 # Query keypoint and bundle adjustment from a fixed, perturbed pose.
 rec = pycolmap.Reconstruction(str(model))
